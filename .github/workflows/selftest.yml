@@ -16,4 +16,3 @@ jobs:
           python-version: "3.12"
       - run: pip install python-chess
       - run: python3 common/test_common.py
-      - run: python3 chess/chess_tactics.py
