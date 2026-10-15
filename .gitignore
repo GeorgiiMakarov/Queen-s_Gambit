@@ -4,3 +4,7 @@ __pycache__/
 trainer_log.csv
 lichess_db_puzzle.csv.zst
 mahjong/raw_logs/
+logs/
+logs2/
+*.xml
+*.log.gz
