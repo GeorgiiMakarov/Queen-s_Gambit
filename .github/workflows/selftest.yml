@@ -14,5 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install python-chess
       - run: python3 common/test_common.py
+      - run: python3 common/test_stats.py
+      - run: python3 common/make_golden.py --check
+      - run: python3 mahjong/danger_ev.v041_frozen.py
