@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тренажёр тактики</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:12px;background:#f5f5f5;color:#222}
+h1{font-size:20px;margin:8px 0}
+.panel{background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;margin:8px 0}
+label{display:block;margin:6px 0}
+input,select{font-size:15px;padding:4px}
+button{font-size:15px;padding:6px 12px;margin:4px 4px 4px 0;cursor:pointer}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100%;max-width:480px;aspect-ratio:1;border:2px solid #333;margin:8px 0;user-select:none}
+.sq{display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer;position:relative}
+.sq.light{background:#ecdcc0}.sq.dark{background:#a9825a}
+.sq.sel{outline:3px solid #2a7fff;outline-offset:-3px}
+.sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(42,127,255,.55)}
+.piece-w{color:#fff;text-shadow:0 0 3px #000,0 0 1px #000}
+.piece-b{color:#111;text-shadow:0 0 1px #fff}
+#feedback{font-weight:bold;margin:8px 0}
+.ok{color:#1a7f37}.bad{color:#c00}
+pre{white-space:pre-wrap;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px}
+small{color:#666}
+</style>
+</head>
+<body>
+<h1>Тренажёр тактики</h1>
+<div class="panel" id="setup">
+<label>Ник Lichess: <input id="nick" placeholder="Georgii_Makarov" size="18">
+<button id="fetchBtn">Подтянуть рейтинг</button></label>
+<label>Рейтинг задач: <input id="rating" type="number" value="886" min="400" max="3500"></label>
+<label>Сет: <select id="setSel"><option value="train">train (практика)</option><option value="test">test (проверка)</option></select></label>
+<label>Задач в сессии: <input id="nInput" type="number" value="10" min="1" max="100"></label>
+<button id="startBtn">Старт</button>
+<label>Свои задачи (CSV puzzles_sample.csv): <input type="file" id="csvFile" accept=".csv"></label>
+<span id="poolInfo"></span>
+</div>
+<div class="panel" id="game" style="display:none">
+<div id="puzzleInfo"></div>
+<div id="board"></div>
+<div id="status"></div>
+<div id="promoPicker" style="display:none">Превращение:
+<button data-p="q">Ферзь</button><button data-p="r">Ладья</button><button data-p="b">Слон</button><button data-p="n">Конь</button>
+</div>
+<div>
+<label>Уверенность: <input type="range" id="conf" min="0" max="100" value="50"> <span id="confVal">50%</span></label>
+<button id="submitBtn" disabled>Ответить</button>
+</div>
+<div id="feedback"></div>
+<button id="nextBtn" style="display:none">Следующая</button>
+</div>
+<div class="panel">
+<button id="reportBtn">Отчёт</button>
+<button id="exportBtn">Скачать CSV (trainer_log.csv)</button>
+<button id="clearBtn">Очистить лог</button>
+<pre id="reportOut"></pre>
+<small>winning = correct: проверка движком «другой выигрыш» в веб-версии недоступна.
+Лог хранится в браузере (localStorage), скачивай CSV для архива.</small>
+</div>
+<script>
+/* __PUZZLES_JSON__ — вставит генератор (200 задач: 100 train + 100 test, сплит по MD5 как в common.hash_split) */
+var EMBEDDED = __PUZZLES_JSON__;
+
+/* --- MD5 (RFC 1321), для сплита train/test при загрузке своего CSV --- */
+function md5(input) {
+  function rl(n, c) { return (n << c) | (n >>> (32 - c)); }
+  function add(x, y) {
+    var l = (x & 0xffff) + (y & 0xffff), m = (x >> 16) + (y >> 16) + (l >> 16);
+    return (m << 16) | (l & 0xffff);
+  }
+  function f(q, a, b, c, x, s, t) { return add(rl(add(add(a, q), add(x, t)), s), b); }
+  function ff(a, b, c, d, x, s, t) { return f((b & c) | (~b & d), a, b, c, x, s, t); }
+  function gg(a, b, c, d, x, s, t) { return f((b & d) | (c & ~d), a, b, c, x, s, t); }
+  function hh(a, b, c, d, x, s, t) { return f(b ^ c ^ d, a, b, c, x, s, t); }
+  function ii(a, b, c, d, x, s, t) { return f(c ^ (b | ~d), a, b, c, x, s, t); }
+  var txt = unescape(encodeURIComponent(input));
+  var len = txt.length;
+  var words = [];
+  for (var i = 0; i < len; i++) words[i >> 2] |= txt.charCodeAt(i) << ((i % 4) << 3);
+  words[len >> 2] |= 0x80 << ((len % 4) << 3);
+  words[(((len + 8) >> 6) << 4) + 14] = len * 8;
+  var a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+  for (var j = 0; j < words.length; j += 16) {
+    var aa = a, bb = b, cc = c, dd = d;
+    a = ff(a, b, c, d, words[j+0], 7, -680876936); d = ff(d, a, b, c, words[j+1], 12, -389564586);
+    c = ff(c, d, a, b, words[j+2], 17, 606105819); b = ff(b, c, d, a, words[j+3], 22, -1044525330);
+    a = ff(a, b, c, d, words[j+4], 7, -176418897); d = ff(d, a, b, c, words[j+5], 12, 1200080426);
+    c = ff(c, d, a, b, words[j+6], 17, -1473231341); b = ff(b, c, d, a, words[j+7], 22, -45705983);
+    a = ff(a, b, c, d, words[j+8], 7, 1770035416); d = ff(d, a, b, c, words[j+9], 12, -1958414417);
+    c = ff(c, d, a, b, words[j+10], 17, -42063); b = ff(b, c, d, a, words[j+11], 22, -1990404162);
+    a = ff(a, b, c, d, words[j+12], 7, 1804603682); d = ff(d, a, b, c, words[j+13], 12, -40341101);
+    c = ff(c, d, a, b, words[j+14], 17, -1502002290); b = ff(b, c, d, a, words[j+15], 22, 1236535329);
+    a = gg(a, b, c, d, words[j+1], 5, -165796510); d = gg(d, a, b, c, words[j+6], 9, -1069501632);
+    c = gg(c, d, a, b, words[j+11], 14, 643717713); b = gg(b, c, d, a, words[j+0], 20, -373897302);
+    a = gg(a, b, c, d, words[j+5], 5, -701558691); d = gg(d, a, b, c, words[j+10], 9, 38016083);
+    c = gg(c, d, a, b, words[j+15], 14, -660478335); b = gg(b, c, d, a, words[j+4], 20, -405537848);
+    a = gg(a, b, c, d, words[j+9], 5, 568446438); d = gg(d, a, b, c, words[j+14], 9, -1019803690);
+    c = gg(c, d, a, b, words[j+3], 14, -187363961); b = gg(b, c, d, a, words[j+8], 20, 1163531501);
+    a = gg(a, b, c, d, words[j+13], 5, -1444681467); d = gg(d, a, b, c, words[j+2], 9, -51403784);
+    c = gg(c, d, a, b, words[j+7], 14, 1735328473); b = gg(b, c, d, a, words[j+12], 20, -1926607734);
+    a = hh(a, b, c, d, words[j+5], 4, -378558); d = hh(d, a, b, c, words[j+8], 11, -2022574463);
+    c = hh(c, d, a, b, words[j+11], 16, 1839030562); b = hh(b, c, d, a, words[j+14], 23, -35309556);
+    a = hh(a, b, c, d, words[j+1], 4, -1530992060); d = hh(d, a, b, c, words[j+4], 11, 1272893353);
+    c = hh(c, d, a, b, words[j+7], 16, -155497632); b = hh(b, c, d, a, words[j+10], 23, -1094730640);
+    a = hh(a, b, c, d, words[j+13], 4, 681279174); d = hh(d, a, b, c, words[j+0], 11, -358537222);
+    c = hh(c, d, a, b, words[j+3], 16, -722521979); b = hh(b, c, d, a, words[j+6], 23, 76029189);
+    a = hh(a, b, c, d, words[j+9], 4, -640364487); d = hh(d, a, b, c, words[j+12], 11, -421815835);
+    c = hh(c, d, a, b, words[j+15], 16, 530742520); b = hh(b, c, d, a, words[j+2], 23, -995338651);
+    a = ii(a, b, c, d, words[j+0], 6, -198630844); d = ii(d, a, b, c, words[j+7], 10, 1126891415);
+    c = ii(c, d, a, b, words[j+14], 15, -1416354905); b = ii(b, c, d, a, words[j+5], 21, -57434055);
+    a = ii(a, b, c, d, words[j+12], 6, 1700485571); d = ii(d, a, b, c, words[j+3], 10, -1894986606);
+    c = ii(c, d, a, b, words[j+10], 15, -1051523); b = ii(b, c, d, a, words[j+1], 21, -2054922799);
+    a = ii(a, b, c, d, words[j+8], 6, 1873313359); d = ii(d, a, b, c, words[j+15], 10, -30611744);
+    c = ii(c, d, a, b, words[j+6], 15, -1560198380); b = ii(b, c, d, a, words[j+13], 21, 1309151649);
+    a = ii(a, b, c, d, words[j+4], 6, -145523070); d = ii(d, a, b, c, words[j+11], 10, -1120210379);
+    c = ii(c, d, a, b, words[j+2], 15, 718787259); b = ii(b, c, d, a, words[j+9], 21, -343485551);
+    a = add(a, aa); b = add(b, bb); c = add(c, cc); d = add(d, dd);
+  }
+  var out = "";
+  [a, b, c, d].forEach(function (n) {
+    for (var k = 0; k < 4; k++) {
+      var byte = (n >> (k * 8)) & 0xff;
+      out += ((byte >> 4) & 0x0f).toString(16) + (byte & 0x0f).toString(16);
+    }
+  });
+  return out;
+}
+function hashSet(id) {
+  return (parseInt(md5(id), 16) % 1000) / 1000 < 0.5 ? "train" : "test";
+}
+
+/* --- Шахматы: FEN + легальные ходы (своя реализация) --- */
+var FILES = "abcdefgh";
+function sqName(i) { return FILES[i % 8] + (8 - Math.floor(i / 8)); }
+function sqIndex(name) { return (8 - parseInt(name[1])) * 8 + FILES.indexOf(name[0]); }
+function idx(f, r) { return (7 - r) * 8 + f; }
+function fileOf(i) { return i % 8; }
+function rankOf(i) { return 7 - Math.floor(i / 8); }
+function inBoard(f, r) { return f >= 0 && f < 8 && r >= 0 && r < 8; }
+function opp(c) { return c === "w" ? "b" : "w"; }
+function parseFEN(fen) {
+  var parts = fen.trim().split(/\s+/);
+  var rows = parts[0].split("/");
+  var board = new Array(64).fill(null);
+  for (var r = 0; r < 8; r++) {
+    var f = 0;
+    for (var ch of rows[r]) {
+      if (/\d/.test(ch)) { f += parseInt(ch); }
+      else { board[r * 8 + f] = { t: ch.toLowerCase(), c: (ch === ch.toUpperCase() ? "w" : "b") }; f++; }
+    }
+  }
+  return { board: board, turn: parts[1] || "w", castling: parts[2] || "-", ep: (parts[3] && parts[3] !== "-") ? sqIndex(parts[3]) : -1 };
+}
+var KNIGHT_OFF = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]];
+var KING_OFF = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+var SLIDE = { b: [[1,1],[1,-1],[-1,1],[-1,-1]], r: [[1,0],[-1,0],[0,1],[0,-1]], q: [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]] };
+var CASTLE = {
+  w: { K: { kingTo: 62, empty: [61, 62], transit: [61, 62], rookFrom: 63, rookTo: 61 },
+       Q: { kingTo: 58, empty: [59, 58, 57], transit: [59, 58], rookFrom: 56, rookTo: 59 } },
+  b: { K: { kingTo: 6, empty: [5, 6], transit: [5, 6], rookFrom: 7, rookTo: 5 },
+       Q: { kingTo: 2, empty: [3, 2, 1], transit: [3, 2], rookFrom: 0, rookTo: 3 } }
+};
+function isAttacked(st, sq, byColor) {
+  var f = fileOf(sq), r = rankOf(sq);
+  var pawnDir = (byColor === "w") ? -1 : 1;
+  for (var df of [-1, 1]) {
+    var pf = f + df, pr = r + pawnDir;
+    if (inBoard(pf, pr)) { var p = st.board[idx(pf, pr)]; if (p && p.t === "p" && p.c === byColor) return true; }
+  }
+  for (var o of KNIGHT_OFF) {
+    var nf = f + o[0], nr = r + o[1];
+    if (inBoard(nf, nr)) { var p = st.board[idx(nf, nr)]; if (p && p.t === "n" && p.c === byColor) return true; }
+  }
+  for (var o of KING_OFF) {
+    var nf = f + o[0], nr = r + o[1];
+    if (inBoard(nf, nr)) { var p = st.board[idx(nf, nr)]; if (p && p.t === "k" && p.c === byColor) return true; }
+  }
+  for (var d of SLIDE.q) {
+    var nf = f + d[0], nr = r + d[1];
+    while (inBoard(nf, nr)) {
+      var p = st.board[idx(nf, nr)];
+      if (p) {
+        if (p.c === byColor) {
+          var isDiag = d[0] !== 0 && d[1] !== 0;
+          if (p.t === "q" || (isDiag && p.t === "b") || (!isDiag && p.t === "r")) return true;
+        }
+        break;
+      }
+      nf += d[0]; nr += d[1];
+    }
+  }
+  return false;
+}
+function addPawnMove(moves, i, to, promo) {
+  if (promo) { for (var pr of ["q", "r", "b", "n"]) moves.push({ from: i, to: to, piece: "p", promotion: pr }); }
+  else moves.push({ from: i, to: to, piece: "p" });
+}
+function genPseudo(st, color) {
+  var moves = [];
+  var dir = (color === "w") ? 1 : -1;
+  var startRank = (color === "w") ? 1 : 6;
+  var promoRank = (color === "w") ? 7 : 0;
+  for (var i = 0; i < 64; i++) {
+    var p = st.board[i];
+    if (!p || p.c !== color) continue;
+    var f = fileOf(i), r = rankOf(i);
+    if (p.t === "p") {
+      var r1 = r + dir;
+      if (inBoard(f, r1) && !st.board[idx(f, r1)]) {
+        addPawnMove(moves, i, idx(f, r1), r1 === promoRank);
+        var r2 = r + 2 * dir;
+        if (r === startRank && !st.board[idx(f, r2)]) moves.push({ from: i, to: idx(f, r2), piece: "p", double: true });
+      }
+      for (var df of [-1, 1]) {
+        var nf = f + df, nr = r + dir;
+        if (!inBoard(nf, nr)) continue;
+        var t = idx(nf, nr);
+        var target = st.board[t];
+        if (target && target.c !== color) addPawnMove(moves, i, t, nr === promoRank);
+        else if (!target && t === st.ep) moves.push({ from: i, to: t, piece: "p", ep: true });
+      }
+    } else if (p.t === "n" || p.t === "k") {
+      var offs = (p.t === "n") ? KNIGHT_OFF : KING_OFF;
+      for (var o of offs) {
+        var nf = f + o[0], nr = r + o[1];
+        if (!inBoard(nf, nr)) continue;
+        var t = idx(nf, nr);
+        var target = st.board[t];
+        if (!target || target.c !== color) moves.push({ from: i, to: t, piece: p.t });
+      }
+      if (p.t === "k") {
+        var home = (color === "w") ? 60 : 4;
+        if (i === home) {
+          var ks = (color === "w") ? "K" : "k", qs = (color === "w") ? "Q" : "q";
+          var ocol = opp(color);
+          for (var side of [ks, qs]) {
+            if (!st.castling.includes(side)) continue;
+            var c = CASTLE[color][side];
+            var rook = st.board[c.rookFrom];
+            if (!rook || rook.t !== "r" || rook.c !== color) continue;
+            if (!c.empty.every(function (s) { return !st.board[s]; })) continue;
+            if (isAttacked(st, home, ocol)) continue;
+            if (c.transit.some(function (s) { return isAttacked(st, s, ocol); })) continue;
+            moves.push({ from: i, to: c.kingTo, piece: "k", castle: side });
+          }
+        }
+      }
+    } else {
+      for (var d of SLIDE[p.t]) {
+        var nf = f + d[0], nr = r + d[1];
+        while (inBoard(nf, nr)) {
+          var t = idx(nf, nr);
+          var target = st.board[t];
+          if (!target) moves.push({ from: i, to: t, piece: p.t });
+          else { if (target.c !== color) moves.push({ from: i, to: t, piece: p.t }); break; }
+          nf += d[0]; nr += d[1];
+        }
+      }
+    }
+  }
+  return moves;
+}
+function findKing(st, color) {
+  for (var i = 0; i < 64; i++) { var p = st.board[i]; if (p && p.t === "k" && p.c === color) return i; }
+  return -1;
+}
+function makeMove(st, m) {
+  var nb = st.board.slice();
+  var piece = nb[m.from];
+  nb[m.from] = null;
+  if (m.ep) nb[idx(fileOf(m.to), rankOf(m.from))] = null;
+  if (m.castle) { var c = CASTLE[piece.c][m.castle]; nb[c.rookTo] = nb[c.rookFrom]; nb[c.rookFrom] = null; }
+  nb[m.to] = { t: m.promotion || piece.t, c: piece.c };
+  var castling = st.castling;
+  if (piece.t === "k") castling = castling.replace(piece.c === "w" ? /[KQ]/g : /[kq]/g, "");
+  if (piece.t === "r") {
+    if (m.from === 63) castling = castling.replace("K", "");
+    if (m.from === 56) castling = castling.replace("Q", "");
+    if (m.from === 7) castling = castling.replace("k", "");
+    if (m.from === 0) castling = castling.replace("q", "");
+  }
+  var captured = st.board[m.to];
+  if (captured && captured.t === "r") {
+    if (m.to === 63) castling = castling.replace("K", "");
+    if (m.to === 56) castling = castling.replace("Q", "");
+    if (m.to === 7) castling = castling.replace("k", "");
+    if (m.to === 0) castling = castling.replace("q", "");
+  }
+  if (!castling) castling = "-";
+  var ep = -1;
+  if (m.double) ep = idx(fileOf(m.from), rankOf(m.from) + (piece.c === "w" ? 1 : -1));
+  return { board: nb, turn: opp(st.turn), castling: castling, ep: ep };
+}
+function genLegal(st, color) {
+  var out = [];
+  for (var m of genPseudo(st, color)) {
+    var st2 = makeMove(st, m);
+    var ksq = findKing(st2, color);
+    if (ksq === -1 || !isAttacked(st2, ksq, opp(color))) out.push(m);
+  }
+  return out;
+}
+function moveUCI(m) { return sqName(m.from) + sqName(m.to) + (m.promotion || ""); }
+
+/* --- Калибровка (как common/calibration.py) --- */
+function expectedP(userRating, itemRating) {
+  return 1 / (1 + Math.pow(10, -(userRating - itemRating) / 400));
+}
+function logLoss(rows) {
+  if (!rows.length) return NaN;
+  var tot = 0;
+  for (var r of rows) {
+    var p = Math.min(Math.max(r.confidence / 100, 0.01), 0.99);
+    var y = r.correct ? 1 : 0;
+    tot += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+  }
+  return tot / rows.length;
+}
+function calibrationBuckets(rows) {
+  var buckets = {};
+  for (var r of rows) {
+    var b = Math.min(Math.floor(r.confidence / 25) * 25, 75);
+    (buckets[b] = buckets[b] || []).push(r);
+  }
+  return Object.keys(buckets).sort(function (a, b) { return a - b; }).map(function (b) {
+    var sub = buckets[b];
+    var mc = sub.reduce(function (s, x) { return s + x.confidence; }, 0) / sub.length;
+    var ac = sub.filter(function (x) { return x.correct; }).length / sub.length;
+    return { b: +b, n: sub.length, mc: mc, ac: ac };
+  });
+}
+function dangerTable(rows, minN) {
+  minN = minN || 3;
+  var byTheme = {};
+  for (var r of rows) for (var t of r.themes.split(/\s+/)) {
+    if (!t) continue;
+    (byTheme[t] = byTheme[t] || []).push(r);
+  }
+  var out = [];
+  for (var t in byTheme) {
+    var sub = byTheme[t];
+    if (sub.length < minN) continue;
+    var ac = sub.filter(function (x) { return x.correct; }).length / sub.length;
+    var ex = sub.reduce(function (s, x) { return s + x.expected; }, 0) / sub.length;
+    out.push({ gap: ac - ex, t: t, n: sub.length, ac: ac, ex: ex });
+  }
+  return out.sort(function (a, b) { return a.gap - b.gap; });
+}
+function buildReport(rows) {
+  var n = rows.length;
+  if (!n) return "лог пуст";
+  var acc = rows.filter(function (r) { return r.correct; }).length / n;
+  var s = "задач: " + n + "  точность: " + (acc * 100).toFixed(1) + "%  log-loss уверенности: " + logLoss(rows).toFixed(3) + "\n";
+  var conclusions = n >= 100;
+  if (!conclusions) s += "ВНИМАНИЕ: n < 100 — выводы рано, нужно 100–200 задач. Ниже только сырые цифры.\n";
+  s += "калибровка (корзина уверенности: n, средняя уверенность, точность):\n";
+  for (var b of calibrationBuckets(rows)) {
+    s += "  " + b.b + "-" + (b.b + 24) + ": n=" + b.n + "  уверенность " + b.mc.toFixed(0) + "%  точность " + (b.ac * 100).toFixed(0) + "%  " +
+      (conclusions && b.mc / 100 > b.ac + 0.15 ? "САМОУВЕРЕННОСТЬ" : "") + "\n";
+  }
+  s += "таблица опасности по темам (факт vs прогноз Glicko):\n";
+  for (var d of dangerTable(rows)) {
+    s += "  " + d.t + "  n=" + d.n + "  факт " + (d.ac * 100).toFixed(0) + "%  прогноз " + (d.ex * 100).toFixed(0) + "%  разрыв " +
+      (d.gap >= 0 ? "+" : "") + (d.gap * 100).toFixed(0) + "%" +
+      (conclusions && d.gap < -0.15 ? " <-- ХУЖЕ ПРОГНОЗА" : "") + "\n";
+  }
+  return s;
+}
+
+/* --- Состояние --- */
+var POOL = EMBEDDED.slice();
+var LOG_KEY = "qgt_log";
+var log = [];
+try { log = JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); } catch (e) { log = []; }
+var session = null; // {queue, i, puzzle, st, legal, selected, pending, t0, rating, setName}
+var GLYPHS = { w: { k: "♔", q: "♕", r: "♖", b: "♗", n: "♘", p: "♙" }, b: { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" } };
+var $ = function (id) { return document.getElementById(id); };
+
+function saveLog() { try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch (e) {} }
+function updatePoolInfo() {
+  var tr = POOL.filter(function (p) { return p.set === "train"; }).length;
+  var te = POOL.filter(function (p) { return p.set === "test"; }).length;
+  $("poolInfo").textContent = "задач в пуле: " + POOL.length + " (train " + tr + ", test " + te + "), в логе: " + log.length;
+}
+updatePoolInfo();
+
+$("conf").addEventListener("input", function () { $("confVal").textContent = $("conf").value + "%"; });
+
+$("fetchBtn").addEventListener("click", function () {
+  var nick = $("nick").value.trim();
+  if (!nick) { alert("Введи ник"); return; }
+  fetch("https://lichess.org/api/user/" + encodeURIComponent(nick))
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (d) {
+      var rt = d && d.perfs && d.perfs.puzzle && d.perfs.puzzle.rating;
+      if (rt) { $("rating").value = rt; alert("Рейтинг задач " + nick + ": " + rt); }
+      else alert("У пользователя нет рейтинга задач");
+    })
+    .catch(function (e) { alert("API недоступен: " + e.message + ". Введи рейтинг вручную."); });
+});
+
+$("csvFile").addEventListener("change", function (ev) {
+  var f = ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    var lines = rd.result.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var out = [];
+    for (var i = 1; i < lines.length; i++) {
+      var c = lines[i].split(",");
+      if (c.length < 5) continue;
+      out.push({ id: c[0], fen: c[1], sol: c[2], rating: +c[3], themes: c[4], set: hashSet(c[0]) });
+    }
+    if (!out.length) { alert("CSV не распознан (нужны колонки PuzzleId,FEN,Solution,Rating,Themes)"); return; }
+    POOL = out;
+    updatePoolInfo();
+    alert("Загружено задач: " + out.length);
+  };
+  rd.readAsText(f);
+});
+
+function renderBoard() {
+  var st = session.st;
+  var flip = st.turn === "b";
+  var boardEl = $("board");
+  boardEl.innerHTML = "";
+  for (var disp = 0; disp < 64; disp++) {
+    var r = Math.floor(disp / 8), f = disp % 8;
+    var sq = flip ? (7 - r) * 8 + (7 - f) : r * 8 + f;
+    var cell = document.createElement("div");
+    cell.className = "sq " + (((Math.floor(sq / 8) + sq % 8) % 2 === 0) ? "light" : "dark");
+    cell.dataset.sq = sq;
+    var piece = st.board[sq];
+    if (piece) {
+      var sp = document.createElement("span");
+      sp.className = piece.c === "w" ? "piece-w" : "piece-b";
+      sp.textContent = GLYPHS[piece.c][piece.t];
+      cell.appendChild(sp);
+    }
+    if (session.selected === sq) cell.classList.add("sel");
+    if (session.targets && session.targets.indexOf(sq) !== -1) cell.classList.add("tgt");
+    cell.addEventListener("click", function () { onSquare(+this.dataset.sq); });
+    boardEl.appendChild(cell);
+  }
+}
+function legalFrom(sq) {
+  return session.legal.filter(function (m) { return m.from === sq; });
+}
+function onSquare(sq) {
+  if (session.answered) return;
+  var st = session.st;
+  if (session.selected === null) {
+    var p = st.board[sq];
+    if (p && p.c === st.turn) {
+      session.selected = sq;
+      session.targets = legalFrom(sq).map(function (m) { return m.to; });
+      renderBoard();
+    }
+    return;
+  }
+  if (sq === session.selected) { session.selected = null; session.targets = []; renderBoard(); return; }
+  var cand = legalFrom(session.selected).filter(function (m) { return m.to === sq; });
+  if (cand.length) {
+    if (cand.length > 1 && cand[0].promotion) {
+      // превращение — показать выбор
+      session.promoFrom = session.selected; session.promoTo = sq;
+      $("promoPicker").style.display = "block";
+      return;
+    }
+    applyMove(cand[0]);
+    return;
+  }
+  var p = st.board[sq];
+  if (p && p.c === st.turn) {
+    session.selected = sq;
+    session.targets = legalFrom(sq).map(function (m) { return m.to; });
+    renderBoard();
+  }
+}
+$("promoPicker").addEventListener("click", function (ev) {
+  var pr = ev.target.dataset && ev.target.dataset.p;
+  if (!pr) return;
+  var cand = legalFrom(session.promoFrom).filter(function (m) { return m.to === session.promoTo && m.promotion === pr; });
+  $("promoPicker").style.display = "none";
+  if (cand.length) applyMove(cand[0]);
+});
+function applyMove(m) {
+  session.pending = m;
+  session.st = makeMove(session.st, m);
+  session.selected = null; session.targets = [];
+  $("submitBtn").disabled = false;
+  $("status").textContent = "Твой ход: " + moveUCI(m) + ". Поставь уверенность и нажми «Ответить».";
+  renderBoard();
+}
+function showPuzzle() {
+  var p = session.queue[session.i];
+  session.puzzle = p;
+  session.st = parseFEN(p.fen);
+  session.legal = genLegal(session.st, session.st.turn);
+  session.selected = null; session.targets = []; session.pending = null; session.answered = false;
+  session.t0 = performance.now();
+  $("game").style.display = "block";
+  $("puzzleInfo").textContent = "[" + (session.i + 1) + "/" + session.queue.length + "] " + p.id +
+    "  рейтинг " + p.rating + "  темы: " + p.themes + "  (" + (session.st.turn === "w" ? "ход белых" : "ход чёрных") + ")";
+  $("status").textContent = "Выбери фигуру и клетку назначения.";
+  $("feedback").textContent = ""; $("feedback").className = "";
+  $("submitBtn").disabled = true;
+  $("nextBtn").style.display = "none";
+  $("conf").value = 50; $("confVal").textContent = "50%";
+  renderBoard();
+}
+$("startBtn").addEventListener("click", function () {
+  var setName = $("setSel").value;
+  var n = Math.max(1, Math.min(100, +$("nInput").value || 10));
+  var rating = +$("rating").value || 886;
+  var solved = {};
+  for (var r of log) solved[r.puzzle_id] = true;
+  var pool = POOL.filter(function (p) { return p.set === setName && !solved[p.id]; });
+  if (pool.length < n) pool = POOL.filter(function (p) { return p.set === setName; });
+  // перетасовать
+  for (var i = pool.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
+  var queue = pool.slice(0, Math.min(n, pool.length));
+  if (!queue.length) { alert("Нет задач в сете " + setName); return; }
+  session = { queue: queue, i: 0, rating: rating, setName: setName };
+  showPuzzle();
+});
+$("submitBtn").addEventListener("click", function () {
+  if (!session.pending || session.answered) return;
+  session.answered = true;
+  var dt = (performance.now() - session.t0) / 1000;
+  var mv = moveUCI(session.pending);
+  var p = session.puzzle;
+  var correct = (mv === p.sol);
+  var conf = +$("conf").value;
+  var exp = expectedP(session.rating, p.rating);
+  log.push({ puzzle_id: p.id, rating: p.rating, themes: p.themes, set: session.setName, move: mv,
+    solution: p.sol, confidence: conf, correct: correct ? 1 : 0, winning: correct ? 1 : 0,
+    seconds: Math.round(dt * 10) / 10, expected: Math.round(exp * 1000) / 1000 });
+  saveLog();
+  $("feedback").textContent = (correct ? "ВЕРНО" : "МИМО (решение: " + p.sol + ")") +
+    ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + dt.toFixed(1) + " c.";
+  $("feedback").className = correct ? "ok" : "bad";
+  $("submitBtn").disabled = true;
+  $("nextBtn").style.display = "inline-block";
+  updatePoolInfo();
+});
+$("nextBtn").addEventListener("click", function () {
+  session.i++;
+  if (session.i >= session.queue.length) {
+    $("game").style.display = "none";
+    $("reportOut").textContent = "--- итог сессии ---\n" + buildReport(log);
+  } else showPuzzle();
+});
+$("reportBtn").addEventListener("click", function () { $("reportOut").textContent = buildReport(log); });
+$("exportBtn").addEventListener("click", function () {
+  var F = ["puzzle_id", "rating", "themes", "set", "move", "solution", "confidence", "correct", "winning", "seconds", "expected"];
+  var lines = [F.join(",")];
+  for (var r of log) lines.push(F.map(function (k) { return r[k]; }).join(","));
+  var blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "trainer_log.csv"; a.click();
+});
+$("clearBtn").addEventListener("click", function () {
+  if (!confirm("Очистить весь лог?")) return;
+  log = []; saveLog(); updatePoolInfo(); $("reportOut").textContent = "лог очищен";
+});
+</script>
+</body>
+</html>

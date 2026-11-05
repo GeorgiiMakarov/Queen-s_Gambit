@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тренажёр тактики</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:12px;background:#f5f5f5;color:#222}
+h1{font-size:20px;margin:8px 0}
+.panel{background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;margin:8px 0}
+label{display:block;margin:6px 0}
+input,select{font-size:15px;padding:4px}
+button{font-size:15px;padding:6px 12px;margin:4px 4px 4px 0;cursor:pointer}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100%;max-width:480px;aspect-ratio:1;border:2px solid #333;margin:8px 0;user-select:none}
+.sq{display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer;position:relative}
+.sq.light{background:#ecdcc0}.sq.dark{background:#a9825a}
+.sq.sel{outline:3px solid #2a7fff;outline-offset:-3px}
+.sq.tgt::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(42,127,255,.55)}
+.piece-w{color:#fff;text-shadow:0 0 3px #000,0 0 1px #000}
+.piece-b{color:#111;text-shadow:0 0 1px #fff}
+#feedback{font-weight:bold;margin:8px 0}
+.ok{color:#1a7f37}.bad{color:#c00}
+pre{white-space:pre-wrap;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px}
+small{color:#666}
+</style>
+</head>
+<body>
+<h1>Тренажёр тактики</h1>
+<div class="panel" id="setup">
+<label>Ник Lichess: <input id="nick" placeholder="ник Lichess" size="18">
+<button id="fetchBtn">Подтянуть рейтинг</button></label>
+<label>Рейтинг задач: <input id="rating" type="number" value="886" min="400" max="3500"></label>
+<label>Сет: <select id="setSel"><option value="train">train (практика)</option><option value="test">test (проверка)</option></select></label>
+<label>Задач в сессии: <input id="nInput" type="number" value="10" min="1" max="100"></label>
+<label><input type="checkbox" id="hintsChk"> Подсказки (тренировка, в статистику не идёт)</label>
+<button id="startBtn">Старт</button>
+<label>Свои задачи (CSV puzzles_sample.csv): <input type="file" id="csvFile" accept=".csv"></label>
+<span id="poolInfo"></span>
+</div>
+<div class="panel" id="game" style="display:none">
+<div id="puzzleInfo"></div>
+<div id="board"></div>
+<div id="status"></div>
+<div id="promoPicker" style="display:none">Превращение:
+<button data-p="q">Ферзь</button><button data-p="r">Ладья</button><button data-p="b">Слон</button><button data-p="n">Конь</button>
+</div>
+<div>
+<label>Уверенность: <input type="range" id="conf" min="0" max="100" value="50"> <span id="confVal">50%</span></label>
+<button id="submitBtn" disabled>Ответить</button>
+</div>
+<div id="feedback"></div>
+<button id="nextBtn" style="display:none">Следующая</button>
+</div>
+<div class="panel">
+<button id="reportBtn">Отчёт</button>
+<button id="exportBtn">Скачать CSV (trainer_log.csv)</button>
+<button id="clearBtn">Очистить лог</button>
+<pre id="reportOut"></pre>
+<small>Рейтинг и темы задачи показываются только после ответа (с галочкой «Подсказки» сразу, но такие строки не попадают в отчёт).
+winning = correct: проверка движком «другой выигрыш» в веб-версии недоступна.
+Лог хранится в браузере (localStorage), скачивай CSV для архива.</small>
+</div>
+<script>
+/* [{"id": "00uid", "fen": "r2qkbr1/pp2pp1p/5n2/2p1Nb2/2Q5/4B3/PP1N1PPP/n2K1B1R w q - 0 13", "sol": "c4f7", "rating": 1217, "themes": "attackingF2F7 mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "00AcQ", "fen": "8/1bpp2k1/1p5r/1P2P3/3P1P2/2P1n1K1/Q5P1/8 b - - 1 30", "sol": "h6g6", "rating": 1741, "themes": "crushing endgame short", "set": "train"}, {"id": "001u3", "fen": "2r3k1/p4pp1/Qq2p2p/b1Np4/2nP1P2/4P1P1/5K1P/2B1N3 w - - 4 34", "sol": "a6c8", "rating": 2190, "themes": "advantage hangingPiece middlegame short", "set": "train"}, {"id": "0191t", "fen": "6k1/1p3r2/p1p1p3/4Pqpp/3P4/1P2R1QP/P4PP1/6K1 b - - 1 33", "sol": "h5h4", "rating": 1783, "themes": "crushing discoveredAttack endgame long", "set": "train"}, {"id": "00Ngg", "fen": "3qk2r/1p1bbppp/4pn2/1BPp1n2/3P4/4PN2/4QPPP/BN2K2R b Kk - 2 15", "sol": "d8a5", "rating": 1471, "themes": "advantage fork middlegame short", "set": "train"}, {"id": "00LOy", "fen": "5k2/1p3pp1/p3p3/r3b3/2P2B2/1P6/1PR1K1PP/8 w - - 1 34", "sol": "b3b4", "rating": 1476, "themes": "crushing endgame short", "set": "train"}, {"id": "00JfN", "fen": "r6r/1bpnk3/1p1pB3/pP1P4/P3PQP1/2b2N1q/2P2P2/R3R1K1 w - - 0 25", "sol": "f4f7", "rating": 971, "themes": "mate mateIn2 middlegame short", "set": "train"}, {"id": "00CbV", "fen": "2r3k1/5p2/p3p1nQ/3pPP2/2qN4/6BP/7K/4b3 w - - 0 34", "sol": "f5f6", "rating": 2479, "themes": "crushing middlegame veryLong", "set": "train"}, {"id": "018Ap", "fen": "8/8/k6p/5Kp1/4Pp2/5B2/2r3PP/8 w - - 0 48", "sol": "e4e5", "rating": 2288, "themes": "crushing endgame long master quietMove", "set": "train"}, {"id": "009Wc", "fen": "1r3rk1/1pqN1pbp/p1p1pnp1/2N5/3P4/1QP5/PP3PPP/3RR1K1 b - - 3 19", "sol": "f6d7", "rating": 1076, "themes": "crushing middlegame short", "set": "train"}, {"id": "0109N", "fen": "r2qkbnr/1p2pppp/p1n5/4N3/2BP4/8/PP3PPP/RNBb1RK1 w kq - 0 9", "sol": "c4f7", "rating": 1215, "themes": "attackingF2F7 mate mateIn1 oneMove opening", "set": "train"}, {"id": "018eM", "fen": "r3k2r/1p1bbpp1/pq3p1p/3p4/3P4/2N2N2/PPP1QPPP/R3K2R w KQkq - 2 12", "sol": "e2e7", "rating": 2162, "themes": "advantage attraction fork long middlegame sacrifice", "set": "train"}, {"id": "02Oku", "fen": "r2qk2r/p2nbppp/2nN4/2p1p3/8/3Q4/PPPP1PPP/RNB1K2R b KQkq - 1 14", "sol": "e7d6", "rating": 2536, "themes": "advantage opening short", "set": "train"}, {"id": "00kZF", "fen": "r3r3/1p1n2pk/2p1p2p/2P5/1p2R3/P2Q1N1P/5PP1/q5K1 w - - 0 25", "sol": "e4e1", "rating": 1307, "themes": "crushing discoveredAttack discoveredCheck middlegame short", "set": "train"}, {"id": "006wz", "fen": "2r5/4ppkp/6p1/1p6/1P6/P3B3/1br2PPP/1R1R2K1 w - - 3 23", "sol": "b1b2", "rating": 1426, "themes": "attraction crushing endgame fork long sacrifice", "set": "train"}, {"id": "00p93", "fen": "1k1r1b1r/n1p3p1/p3n1p1/1p2P3/P2B2Pq/2P2Q1P/1PB1K3/R6R w - - 1 25", "sol": "d4a7", "rating": 1852, "themes": "crushing long middlegame pin queensideAttack", "set": "train"}, {"id": "00agR", "fen": "8/5pp1/p4n1p/1p2k3/8/1PK1P2P/P1B2P2/8 b - - 0 31", "sol": "f6e4", "rating": 1807, "themes": "crushing endgame short", "set": "train"}, {"id": "002O7", "fen": "r3qrk1/2p2pp1/p2bpn1p/2ppN3/3P1Pb1/1PP1P1B1/P2N2PP/R2Q1RK1 w - - 1 15", "sol": "e5g4", "rating": 1008, "themes": "crushing middlegame short", "set": "train"}, {"id": "002KJ", "fen": "r3k2r/ppq1bppp/4pn2/2Ppn3/1P4bP/2P2N2/P3BPP1/RNBQ1RK1 w kq - 3 11", "sol": "f3e5", "rating": 1569, "themes": "crushing discoveredAttack middlegame short", "set": "train"}, {"id": "007eS", "fen": "6k1/p4p2/1p5p/4r3/P3B3/1P2KP2/2P3PP/8 b - - 1 29", "sol": "f7f5", "rating": 1197, "themes": "advantage endgame short", "set": "train"}, {"id": "00JH5", "fen": "8/2Q2pk1/8/3pp2P/2q5/2P5/KP6/8 w - - 2 37", "sol": "c7c4", "rating": 2082, "themes": "crushing defensiveMove endgame queenEndgame short", "set": "train"}, {"id": "00Kd8", "fen": "3R4/3P4/8/5p2/5kPp/8/3r2P1/6K1 b - - 2 64", "sol": "f4g3", "rating": 2133, "themes": "advantage endgame rookEndgame short", "set": "train"}, {"id": "00hCU", "fen": "r1b2r2/1p5k/2Pp2pp/p2Bb3/2Pp1p2/P2P2Pq/3B1P1P/1R1QR1K1 b - - 0 26", "sol": "f4g3", "rating": 2789, "themes": "attraction crushing deflection kingsideAttack long middlegame sacrifice", "set": "train"}, {"id": "00qHr", "fen": "8/5p2/p2Rpkpn/N7/P4P2/4P1K1/r4P1P/8 b - - 2 36", "sol": "h6f5", "rating": 841, "themes": "advantage endgame fork master short", "set": "train"}, {"id": "002CP", "fen": "r5k1/pp4pp/4p1q1/4p3/3n4/P3Q1P1/1PP4P/2KR1R2 b - - 5 24", "sol": "g6c2", "rating": 923, "themes": "endgame mate mateIn1 oneMove queensideAttack", "set": "train"}, {"id": "00liA", "fen": "8/3K4/r7/6k1/6p1/6Pp/3R3P/8 w - - 3 55", "sol": "d2d5", "rating": 925, "themes": "crushing defensiveMove endgame rookEndgame veryLong", "set": "train"}, {"id": "00HqY", "fen": "8/6p1/8/8/4P2k/5KpP/8/8 w - - 4 47", "sol": "f3g2", "rating": 1802, "themes": "crushing endgame master pawnEndgame short zugzwang", "set": "train"}, {"id": "0158C", "fen": "3r3k/1Qp3p1/p4q1p/8/3N4/8/PPP2PPP/2K1R3 b - - 0 23", "sol": "f6d4", "rating": 1686, "themes": "crushing endgame fork long", "set": "train"}, {"id": "00wiq", "fen": "8/2N5/8/1p4p1/1P3k1p/P4b1P/5K2/8 w - - 0 54", "sol": "c7e6", "rating": 2092, "themes": "crushing deflection endgame veryLong", "set": "train"}, {"id": "012Fl", "fen": "2b2k2/2q2p2/p1p2Ppr/4p3/2r1B3/5Q2/P1P4P/R2R3K w - - 0 25", "sol": "f3e3", "rating": 2537, "themes": "crushing master middlegame short", "set": "train"}, {"id": "04BOH", "fen": "r3r1k1/pp3p1p/2pn2p1/6B1/6P1/P4Q1P/1qP5/R4R1K w - - 1 23", "sol": "a1d1", "rating": 2783, "themes": "crushing middlegame veryLong", "set": "train"}, {"id": "00aYp", "fen": "2rq1r2/p1n1bpk1/1p2p1pN/3nP2p/3P3P/P2Q1N2/1P4P1/RBB3K1 w - - 2 22", "sol": "h6f7", "rating": 1737, "themes": "crushing master middlegame short", "set": "train"}, {"id": "00JO7", "fen": "5rk1/pp4pR/4p1r1/2qp4/8/2P4Q/PP3RPP/6K1 w - - 1 23", "sol": "h7h8", "rating": 986, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "00cud", "fen": "8/5p2/6p1/1p1N1k2/1P1K4/2P3P1/8/5b2 w - - 1 49", "sol": "d5e3", "rating": 959, "themes": "crushing endgame fork master short", "set": "train"}, {"id": "00oxX", "fen": "r1q2rk1/1R1b1pp1/2n2n1p/3p1B2/2pP1B2/5N2/2Q2PPP/1R4K1 w - - 5 23", "sol": "f5d7", "rating": 2198, "themes": "advantage middlegame short", "set": "train"}, {"id": "00Nua", "fen": "8/1p1k2r1/p1p5/2P1R3/PP1pP3/3r4/5RPK/8 b - - 0 31", "sol": "g7h7", "rating": 1841, "themes": "endgame", "set": "train"}, {"id": "01VHY", "fen": "2k5/p1p5/P7/1PP1r3/5p1p/6pP/6P1/2R3K1 w - - 0 40", "sol": "b5b6", "rating": 2798, "themes": "advancedPawn crushing defensiveMove endgame long rookEndgame", "set": "train"}, {"id": "01wOR", "fen": "8/7p/1k6/2p3p1/4p1P1/1PK1Pp1P/5P2/8 w - - 1 47", "sol": "c3c4", "rating": 2184, "themes": "crushing defensiveMove endgame pawnEndgame veryLong", "set": "train"}, {"id": "000aY", "fen": "r4rk1/pp2Bppp/2n1b3/q1pp4/8/P1Q2NP1/1PP1PP1P/2KR3R b - - 1 15", "sol": "a5c3", "rating": 1412, "themes": "advantage master middlegame short", "set": "train"}, {"id": "01Bxs", "fen": "r2q1rk1/3b1pbp/pppQ4/5P2/3B2n1/1BN5/PPP3PP/R4RK1 b - - 1 17", "sol": "d8b8", "rating": 2481, "themes": "advantage long middlegame", "set": "train"}, {"id": "01UHL", "fen": "r6k/1p1R1Q2/p4b2/P4bqp/5Rp1/1P3P2/5P2/5BK1 b - - 2 34", "sol": "g4f3", "rating": 2227, "themes": "crushing discoveredAttack long middlegame quietMove", "set": "train"}, {"id": "00Enl", "fen": "2kr4/1pp5/p1b4R/2PpP3/3B2p1/2P1Q1Pp/PPq4P/5RK1 b - - 0 27", "sol": "c2g2", "rating": 831, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "011zd", "fen": "r4rk1/Rq3ppp/1n2p3/Q2pN3/2pP4/4P3/1PP2PPP/R5K1 b - - 0 19", "sol": "a8a7", "rating": 1732, "themes": "advantage long middlegame", "set": "train"}, {"id": "043sf", "fen": "2r2rk1/1p5p/p3p1pP/3p4/3P1qP1/PP1R2QR/5PK1/8 b - - 3 38", "sol": "f4e4", "rating": 2422, "themes": "crushing endgame long pin", "set": "train"}, {"id": "00TQf", "fen": "4r1k1/p1R1n2p/4N3/5r2/6K1/6PP/P3R3/8 b - - 4 46", "sol": "h7h5", "rating": 1204, "themes": "endgame mate mateIn2 short", "set": "train"}, {"id": "03fqJ", "fen": "8/4k3/4p3/3pP2K/3P2PP/4P3/8/3n4 b - - 0 41", "sol": "e7f7", "rating": 2693, "themes": "crushing endgame knightEndgame short", "set": "train"}, {"id": "00EUu", "fen": "8/5P1P/1p4Kr/8/6P1/8/2p5/k7 w - - 1 63", "sol": "g6h6", "rating": 2529, "themes": "crushing defensiveMove endgame long", "set": "train"}, {"id": "00J5q", "fen": "8/5Qpk/4p3/1p6/8/pq1bB2P/5PP1/6K1 w - - 0 33", "sol": "e3d4", "rating": 2201, "themes": "crushing endgame short", "set": "train"}, {"id": "01Dor", "fen": "8/3k2P1/3PQ3/p1q2p2/1p6/1P4r1/P1P5/1K1R4 b - - 0 39", "sol": "d7e6", "rating": 2192, "themes": "crushing endgame hangingPiece long master", "set": "train"}, {"id": "00T2k", "fen": "2k5/p3qp2/bpp1p1p1/4r3/P4n1p/5P2/BPQ2B1P/1K1R4 w - - 0 31", "sol": "c2c6", "rating": 1583, "themes": "advantage long middlegame queensideAttack", "set": "train"}, {"id": "04GC9", "fen": "r2r3k/1pp3q1/2n1Q3/p2n4/8/P3PP2/1P1BB3/1R2K3 w - - 0 31", "sol": "e1f2", "rating": 2765, "themes": "advantage exposedKing fork middlegame pin sacrifice veryLong", "set": "train"}, {"id": "007QU", "fen": "2rq1rk1/1b5p/p3p3/1p1pBpp1/2nP2N1/1RP1PP2/P1Q3PP/3R2K1 w - - 0 23", "sol": "g4h6", "rating": 1144, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "00WqT", "fen": "r4r2/1ppb1p2/p2p2p1/5P1k/4P3/2PBB1R1/PKP2P1q/8 w - - 5 27", "sol": "d3e2", "rating": 1592, "themes": "mate mateIn2 middlegame short", "set": "train"}, {"id": "008Y3", "fen": "r5k1/1p1r1pp1/p3pnp1/2qN4/8/1Q5P/PP3PP1/3RR1K1 w - - 0 25", "sol": "d5f6", "rating": 1054, "themes": "advantage discoveredAttack kingsideAttack master middlegame short", "set": "train"}, {"id": "00UwP", "fen": "5rk1/p4pp1/3qb2p/1B1p4/3P4/Q3PN2/P4PPP/1rR3K1 w - - 6 20", "sol": "a3d6", "rating": 1184, "themes": "advantage master middlegame short", "set": "train"}, {"id": "01oyD", "fen": "r3kq1N/ppp4Q/4b1p1/3B4/3n4/8/PPPP1bPP/RNB2K1R b q - 0 13", "sol": "e6d5", "rating": 2372, "themes": "crushing defensiveMove middlegame short", "set": "train"}, {"id": "00TiV", "fen": "8/1kp5/4n3/3p4/r2P3R/2K2N1P/8/8 b - - 6 48", "sol": "a4a3", "rating": 1135, "themes": "crushing endgame short skewer", "set": "train"}, {"id": "00qb9", "fen": "8/8/2k5/1p6/1Pp1K3/2P5/8/8 w - - 3 55", "sol": "e4e5", "rating": 1773, "themes": "crushing endgame pawnEndgame short", "set": "train"}, {"id": "00MYL", "fen": "1R6/5Q2/p1kb1p2/2r1p3/3n4/P6P/5PP1/4qBK1 w - - 2 41", "sol": "f7b7", "rating": 1100, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "01UYy", "fen": "3k4/1K1B4/4p2p/2P1Pp2/5n2/8/7P/8 b - - 0 51", "sol": "f4d3", "rating": 2236, "themes": "crushing defensiveMove endgame long master", "set": "train"}, {"id": "0039T", "fen": "1r5r/p3kp2/4p2p/4P3/R4Pp1/6P1/P1P4P/4K2R b K - 2 25", "sol": "b8b1", "rating": 1121, "themes": "crushing defensiveMove endgame long rookEndgame skewer", "set": "train"}, {"id": "016e7", "fen": "6r1/p6p/1p1ppk1r/5p2/2PPnp2/3N3P/PP2RPPK/3R4 b - - 1 31", "sol": "f4f3", "rating": 2071, "themes": "advantage endgame master short", "set": "train"}, {"id": "00e6Q", "fen": "5r2/pppk2pp/3p1r2/8/3PPn2/2P2Pq1/PP2B2P/R3KR2 w Q - 0 22", "sol": "h2g3", "rating": 1540, "themes": "advantage middlegame short", "set": "train"}, {"id": "00jhH", "fen": "r7/2p1kp2/3p1np1/1p2p1N1/4P3/2PP2P1/1P3QPK/8 b - - 5 29", "sol": "f6g4", "rating": 913, "themes": "crushing endgame fork short", "set": "train"}, {"id": "00BNd", "fen": "1rr3k1/4ppbp/3p1np1/1b1N4/P2BP3/5P2/P2R2PP/R5K1 w - - 0 22", "sol": "d5e7", "rating": 1026, "themes": "advantage fork middlegame short", "set": "train"}, {"id": "02yET", "fen": "2r3k1/1R6/3B1p2/1PnPp3/4PpPp/5PbP/6r1/1K1R4 w - - 1 44", "sol": "d6c5", "rating": 2727, "themes": "advancedPawn crushing master middlegame quietMove sacrifice veryLong", "set": "train"}, {"id": "00WlQ", "fen": "2r1r1k1/pp3pp1/4bb1p/2qN4/Q7/1P1RPN2/P4PPP/3R2K1 b - - 0 19", "sol": "e6d5", "rating": 1756, "themes": "crushing middlegame short", "set": "train"}, {"id": "0061g", "fen": "6k1/pp3pp1/2p1q1Pp/3b4/8/6Q1/PB3Pp1/3r1NK1 w - - 0 28", "sol": "g3b8", "rating": 801, "themes": "endgame mate mateIn2 short", "set": "train"}, {"id": "00l68", "fen": "6Q1/q1k5/3pB1p1/2pP1p2/2P2P2/rp2PK1P/8/8 w - - 3 38", "sol": "g8c8", "rating": 1382, "themes": "endgame long mate mateIn3", "set": "train"}, {"id": "00P45", "fen": "3r1r2/p1p2p1k/1p3Ppp/4p2P/3qBQ2/8/PPP3P1/5R1K w - - 0 28", "sol": "h5g6", "rating": 2496, "themes": "advantage endgame veryLong", "set": "train"}, {"id": "01hYA", "fen": "r7/2P4p/3K2p1/3p1p2/pP5P/Rbk1P1P1/8/8 w - - 1 52", "sol": "b4b5", "rating": 2197, "themes": "crushing endgame master quietMove short", "set": "train"}, {"id": "00t2W", "fen": "r3r1k1/p4ppp/2p5/5q2/2RPn3/3Q1PB1/P5PP/4R1K1 b - - 0 27", "sol": "e4g3", "rating": 1355, "themes": "crushing long middlegame", "set": "train"}, {"id": "00s9L", "fen": "2rqr1k1/5pp1/Rb5p/1p2p3/3pP3/1N1P1PP1/3Q1P2/2R3K1 w - - 1 26", "sol": "c1c8", "rating": 1142, "themes": "advantage middlegame short", "set": "train"}, {"id": "02BFi", "fen": "8/7p/4k1p1/4B2P/p1Pp4/1p1K3P/1P3P2/8 b - - 0 35", "sol": "e6e5", "rating": 2968, "themes": "crushing endgame hangingPiece veryLong", "set": "train"}, {"id": "01uCs", "fen": "1r5r/2p2ppp/Q5b1/5k2/4p3/2P5/P1PR1PqP/2K3NR w - - 0 18", "sol": "d2d5", "rating": 2685, "themes": "advantage long middlegame", "set": "train"}, {"id": "00VGt", "fen": "3K4/8/2P5/R5pp/1n6/5PkP/6P1/8 b - - 4 61", "sol": "b4c6", "rating": 1061, "themes": "crushing endgame fork short", "set": "train"}, {"id": "00nxI", "fen": "r3kbnr/p5pp/2pp2q1/4n2b/2P1Pp2/P1N2N1P/4BP1R/1RBQK3 w kq - 0 22", "sol": "f3e5", "rating": 1948, "themes": "advantage long middlegame", "set": "train"}, {"id": "00HEh", "fen": "3r2k1/pp3ppp/2p3b1/2n3P1/2B2q1P/5N2/PPP1QP2/4R1K1 w - - 0 24", "sol": "e2e8", "rating": 812, "themes": "kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "train"}, {"id": "012uN", "fen": "8/p2n1k2/5P2/5KPP/2P5/2n5/8/8 w - - 2 50", "sol": "g5g6", "rating": 1929, "themes": "crushing endgame knightEndgame short", "set": "train"}, {"id": "0055Y", "fen": "r1b2rk1/p3pp2/2B5/2Qpq3/3N2pp/4b3/2P2PPP/1R2K2R w K - 0 24", "sol": "f2e3", "rating": 2055, "themes": "advantage defensiveMove middlegame short", "set": "train"}, {"id": "003eP", "fen": "6k1/r1b1q3/2p3p1/2Pp4/1P2p1n1/2B1P3/NQ6/2K4R w - - 2 37", "sol": "h1h8", "rating": 1156, "themes": "crushing exposedKing long middlegame skewer", "set": "train"}, {"id": "00yP0", "fen": "2r1r1k1/2q4p/4pp1Q/p2p3R/3P4/2P4P/P4PP1/6K1 w - - 1 28", "sol": "h6f6", "rating": 1412, "themes": "advantage endgame long pin", "set": "train"}, {"id": "00KRo", "fen": "4r3/pp1b2pp/8/2pPkpK1/2P1p2P/2P3P1/P3R3/2B5 w - - 3 27", "sol": "c1f4", "rating": 894, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "01ICu", "fen": "8/5B2/8/8/5k2/2n1p3/Pr3P1P/R4K2 b - - 1 38", "sol": "b2f2", "rating": 2148, "themes": "crushing defensiveMove endgame long", "set": "train"}, {"id": "00Oqz", "fen": "5r2/7r/2kpqBRP/p1p1p2Q/P3P3/2PP4/5P1K/8 b - - 1 40", "sol": "f8f6", "rating": 904, "themes": "crushing endgame master short", "set": "train"}, {"id": "0068B", "fen": "r1q3k1/3nbppp/pp2p3/4B3/8/2N2Q2/PPPR1PPP/6K1 w - - 1 19", "sol": "d2d7", "rating": 1459, "themes": "crushing deflection middlegame short", "set": "train"}, {"id": "01rio", "fen": "8/8/8/p1pp4/4kPp1/1K4P1/P1P5/8 w - - 0 36", "sol": "a2a3", "rating": 2612, "themes": "crushing endgame pawnEndgame quietMove short zugzwang", "set": "train"}, {"id": "03z2J", "fen": "8/q4k2/2p1pbp1/2p1p1B1/2P1PpPK/3P1P2/1Q6/8 w - - 2 39", "sol": "g5f6", "rating": 2406, "themes": "advantage attraction deflection endgame veryLong", "set": "train"}, {"id": "01vUA", "fen": "r5k1/p1pN1r1p/1p2pppP/8/8/2B5/PPP3b1/2K2R1R w - - 2 24", "sol": "d7f6", "rating": 2036, "themes": "advantage kingsideAttack middlegame short", "set": "train"}, {"id": "009FS", "fen": "r2qr1k1/p5bp/1pp1N1p1/8/2Q2p2/2P1n2P/PP3PP1/R1B1RNK1 b - - 0 18", "sol": "e3c4", "rating": 1712, "themes": "crushing discoveredAttack opening short", "set": "train"}, {"id": "03Mp8", "fen": "r4rk1/1pp2p1p/5RpP/p3P3/8/2Q5/qPP5/2KR4 w - - 0 26", "sol": "e5e6", "rating": 2420, "themes": "crushing endgame sacrifice veryLong", "set": "train"}, {"id": "03Tly", "fen": "r4r2/ppqn1pbk/2pp2pB/4n3/3pP2N/1B6/PPPQ2PP/R4RK1 w - - 4 18", "sol": "h6g7", "rating": 2445, "themes": "crushing middlegame short", "set": "train"}, {"id": "00dRh", "fen": "1q5k/1b2Q1pp/pb3p2/1p6/1P2P3/PB3n2/5PKP/3RR3 b - - 1 25", "sol": "b8h2", "rating": 1843, "themes": "crushing middlegame short", "set": "train"}, {"id": "00u3h", "fen": "8/2p2r1p/1p4pk/p2PQ3/2P3P1/1P1q1B1P/P1n3K1/8 w - - 8 42", "sol": "g4g5", "rating": 1213, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "01iEi", "fen": "8/8/4pk2/p1p4p/Pp1pKP2/1P1P3P/2P5/8 b - - 0 38", "sol": "h5h4", "rating": 2219, "themes": "crushing defensiveMove endgame pawnEndgame quietMove veryLong zugzwang", "set": "train"}, {"id": "00VlM", "fen": "1k6/1p2rp1p/1p4b1/1N1B4/2P2R2/3p3P/P2Rr3/2K5 b - - 0 34", "sol": "e2e1", "rating": 2348, "themes": "advantage clearance deflection exposedKing middlegame veryLong", "set": "train"}, {"id": "00F1l", "fen": "8/2k1b3/5p2/RBpK1Pp1/P2p2P1/1p1P4/2r5/8 w - - 0 46", "sol": "a5a7", "rating": 836, "themes": "crushing endgame master short skewer", "set": "train"}, {"id": "00WJN", "fen": "5Q2/7K/8/8/4p2P/3k2q1/8/8 w - - 2 54", "sol": "f8a3", "rating": 1324, "themes": "crushing endgame queenEndgame short skewer", "set": "train"}, {"id": "00UOA", "fen": "6k1/5p1p/4p1p1/p2p4/2rb1P2/P3B1P1/1P2R1KP/8 w - - 0 31", "sol": "b2b3", "rating": 1657, "themes": "advantage endgame short", "set": "train"}, {"id": "00IYg", "fen": "r1b2r2/pp2n1p1/1qn1ppk1/3pP1N1/3P3P/P7/1P1Q1PP1/RN2K2R w KQ - 0 14", "sol": "h4h5", "rating": 1720, "themes": "advantage discoveredAttack discoveredCheck long middlegame", "set": "train"}, {"id": "00zOQ", "fen": "2r3k1/p7/7p/1p4p1/6R1/3B1q1P/2P3RP/2B4K b - - 7 35", "sol": "c8e8", "rating": 1925, "themes": "advantage deflection endgame long quietMove", "set": "test"}, {"id": "00OQt", "fen": "8/8/8/p3b3/P1B2p1K/1Pk1p2P/6P1/8 b - - 0 50", "sol": "c3d2", "rating": 1709, "themes": "advancedPawn bishopEndgame crushing endgame long", "set": "test"}, {"id": "013vX", "fen": "2k5/2p2p2/P1N3p1/1PK2n2/8/7p/2P2P2/8 w - - 0 42", "sol": "b5b6", "rating": 2634, "themes": "advancedPawn crushing endgame knightEndgame long", "set": "test"}, {"id": "03fw0", "fen": "8/5pp1/7p/RB2k3/P3n1PK/1r3P1P/8/8 b - - 2 42", "sol": "e5f4", "rating": 2532, "themes": "crushing endgame long quietMove", "set": "test"}, {"id": "011RD", "fen": "7r/2p2k2/1p6/p3R2r/P2Q1pb1/2P5/q1PK1PP1/6R1 w - - 1 39", "sol": "d4f4", "rating": 1694, "themes": "crushing exposedKing fork long master middlegame", "set": "test"}, {"id": "00wPZ", "fen": "r1b2rk1/ppp2ppp/8/1B1p4/3bn3/5N2/PPP2qPP/RNBQR2K b - - 1 12", "sol": "f2g1", "rating": 1394, "themes": "kingsideAttack mate mateIn2 opening sacrifice short smotheredMate", "set": "test"}, {"id": "007AS", "fen": "1r2kb1r/3nnpp1/4p1bp/1NppP3/3P4/6N1/P2BBPPP/R3K2R w KQk - 1 18", "sol": "b5d6", "rating": 1582, "themes": "crushing master middlegame short", "set": "test"}, {"id": "00s9T", "fen": "8/8/p5pp/2k5/2p3PP/2K2P2/P7/8 b - - 0 41", "sol": "g6g5", "rating": 2062, "themes": "crushing endgame pawnEndgame short", "set": "test"}, {"id": "00uAh", "fen": "r1q3k1/1pb3pp/p1b5/3p1pB1/4N1NQ/8/PPP2PPP/2K5 w - - 0 22", "sol": "g4f6", "rating": 2250, "themes": "crushing kingsideAttack long middlegame", "set": "test"}, {"id": "00Gz6", "fen": "r7/p4kp1/1p4p1/2qNn3/Q7/4PP2/PP3K2/6R1 w - - 1 26", "sol": "a4f4", "rating": 2253, "themes": "crushing endgame fork long pin", "set": "test"}, {"id": "00lhJ", "fen": "3q3k/8/3PQ2p/p3n1r1/P1P4b/2N1p2P/1r6/R5RK w - - 0 33", "sol": "e6h6", "rating": 2446, "themes": "crushing fork middlegame veryLong", "set": "test"}, {"id": "01Amj", "fen": "8/8/8/2p1K3/p7/1k6/8/2B5 b - - 2 54", "sol": "a4a3", "rating": 2019, "themes": "bishopEndgame crushing defensiveMove endgame long", "set": "test"}, {"id": "00Mf0", "fen": "2kr3r/pp1b1p2/2n1p2q/2Pp4/5Np1/1QP3P1/P4PBP/R4RK1 w - - 5 20", "sol": "f1b1", "rating": 2380, "themes": "advantage long master middlegame quietMove", "set": "test"}, {"id": "00GBX", "fen": "r6k/pp2n1pp/2nN4/4p1r1/1PB5/2P4b/P3Nb1P/R2R3K w - - 0 23", "sol": "d6f7", "rating": 864, "themes": "advantage discoveredAttack discoveredCheck fork middlegame short", "set": "test"}, {"id": "00eNe", "fen": "4r1k1/p1p2ppp/2p1r3/3q4/P2B4/1P1P4/2Q2PPP/2R1R1K1 b - - 0 21", "sol": "e6e1", "rating": 910, "themes": "kingsideAttack mate mateIn2 middlegame short", "set": "test"}, {"id": "00XAG", "fen": "3r2k1/p3ppb1/b3q1pp/2p5/2N5/1r1RB3/P4PPP/2R1N1K1 w - - 0 22", "sol": "d3d8", "rating": 1901, "themes": "advantage hangingPiece intermezzo master middlegame short", "set": "test"}, {"id": "00Or5", "fen": "r2qkbnr/pp5p/8/4Nb2/8/1Qp5/PP2PPPP/R3KB1R w KQkq - 0 13", "sol": "b3f7", "rating": 1435, "themes": "mate mateIn1 oneMove opening", "set": "test"}, {"id": "03RCx", "fen": "4r3/p2RP3/2kP4/7p/8/5pr1/5R2/1K6 w - - 1 53", "sol": "d7d8", "rating": 2793, "themes": "advancedPawn clearance crushing defensiveMove endgame exposedKing promotion rookEndgame veryLong", "set": "test"}, {"id": "00unD", "fen": "2kr1bnr/2p2p1p/1p1q2pP/p3N3/P2P4/4B3/1PP2Pb1/RN1QK2R w KQ - 0 17", "sol": "d1g4", "rating": 1519, "themes": "crushing fork middlegame short", "set": "test"}, {"id": "01243", "fen": "r7/pp1Qp1B1/3b4/3k4/4q3/8/PP3PP1/5K2 w - - 5 35", "sol": "d7b7", "rating": 1561, "themes": "crushing deflection endgame fork master short skewer", "set": "test"}, {"id": "00nZE", "fen": "r1b1r3/pp1p1p1k/2n2Bp1/2p1qp2/2B1P3/3P1R2/PPP3PP/R5K1 w - - 0 17", "sol": "f3h3", "rating": 1052, "themes": "mate mateIn2 middlegame operaMate short", "set": "test"}, {"id": "00L1Y", "fen": "3rkb1r/pp2pbpp/2p5/q7/1Q3B2/2P3P1/PP2PP1P/RN2K2R b KQk - 1 15", "sol": "a5d5", "rating": 1847, "themes": "advantage long middlegame", "set": "test"}, {"id": "011cm", "fen": "k7/pn1R1pp1/8/2P2q1p/Q2p3P/5P2/P4PK1/4r3 w - - 1 41", "sol": "a4c6", "rating": 2380, "themes": "endgame equality long", "set": "test"}, {"id": "00TJN", "fen": "r3r1k1/pp3pB1/2q3pp/3R4/8/P4Q2/BP3PPP/1b4K1 w - - 0 24", "sol": "f3f7", "rating": 1800, "themes": "attraction doubleCheck kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "test"}, {"id": "01rPb", "fen": "7r/pQ3pk1/1np3p1/3p4/3P1NK1/1P2r1P1/P4q2/2R1R3 w - - 0 30", "sol": "e1e3", "rating": 2481, "themes": "advantage middlegame short", "set": "test"}, {"id": "01Pkf", "fen": "r2q1rk1/3pb1pp/1p1Npn2/pB1bB3/3P3P/PQ6/1P3P2/R3K1R1 w Q - 2 21", "sol": "b3g3", "rating": 2540, "themes": "crushing long middlegame sacrifice", "set": "test"}, {"id": "01S0o", "fen": "rq3rk1/p1Nn1p2/1pQ1p2p/4P1p1/2P3n1/8/PP3PPP/R3KB1R b KQ - 0 17", "sol": "d7e5", "rating": 2400, "themes": "crushing defensiveMove middlegame veryLong", "set": "test"}, {"id": "005jJ", "fen": "r1b1qrk1/pp1n1pbp/2pp1np1/4P3/2P2B2/2NBPN1P/PP3PP1/R2Q1RK1 b - - 0 10", "sol": "d6e5", "rating": 1215, "themes": "advantage opening short", "set": "test"}, {"id": "00LZf", "fen": "r1b1kb1r/pppp1ppp/2n1p3/4N3/3P2q1/4n3/PPP1BPPP/RN1Q1RK1 w kq - 0 9", "sol": "f2e3", "rating": 2156, "themes": "advantage attackingF2F7 fork long opening", "set": "test"}, {"id": "01jCT", "fen": "4r1k1/ppR2ppp/8/4r3/8/2P2Q2/PPq2PPP/R4K2 b - - 4 23", "sol": "e5f5", "rating": 2316, "themes": "advantage endgame long", "set": "test"}, {"id": "003S3", "fen": "1r3k1r/pNqnppb1/6pn/2p3Np/7P/2P2Q2/PP3PP1/R1B1K2R w KQ - 3 16", "sol": "g5e6", "rating": 1336, "themes": "advantage middlegame pin short", "set": "test"}, {"id": "01cXb", "fen": "7k/6p1/5r1p/4p3/2pp4/2q2PP1/Q3P1KP/1R6 w - - 2 32", "sol": "a2a8", "rating": 2253, "themes": "crushing endgame pin veryLong", "set": "test"}, {"id": "00SWh", "fen": "rn5Q/pp2np2/1k1B4/6N1/6b1/8/PPP1q3/2KR4 w - - 1 19", "sol": "h8d4", "rating": 2778, "themes": "crushing exposedKing long middlegame", "set": "test"}, {"id": "00Yy4", "fen": "r7/pp4kp/6p1/2P2q1n/1PBb1p2/P4P2/3B2PP/2Q1R2K b - - 2 28", "sol": "h5g3", "rating": 1049, "themes": "clearance kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "test"}, {"id": "00Ocp", "fen": "r3k3/p1pb4/2p2p2/2q1p1p1/2B3p1/2P4r/P1P2PQP/3RR1K1 w q - 4 21", "sol": "g2e4", "rating": 2152, "themes": "crushing exposedKing long middlegame", "set": "test"}, {"id": "006cZ", "fen": "3r1r1k/1p4p1/p1p3Qp/2q5/8/3n1N1P/PP1R2P1/5R1K w - - 8 29", "sol": "d2d3", "rating": 1374, "themes": "advantage master masterVsMaster middlegame short", "set": "test"}, {"id": "00KYE", "fen": "r1b2k1r/pp4p1/2pq2p1/3p4/3Q4/1N6/PPP2PPP/R4RK1 b - - 0 17", "sol": "d6h2", "rating": 894, "themes": "kingsideAttack mate mateIn1 middlegame oneMove", "set": "test"}, {"id": "03ABF", "fen": "5r1k/6p1/6B1/pp1n4/4P3/6B1/P3R1PP/2b3K1 b - - 0 31", "sol": "d5c3", "rating": 2623, "themes": "advantage endgame master quietMove veryLong", "set": "test"}, {"id": "00ofO", "fen": "8/6pp/2p1kp2/P1Bpn3/1P6/7P/r4PP1/4R1K1 w - - 3 32", "sol": "f2f4", "rating": 1487, "themes": "crushing endgame short", "set": "test"}, {"id": "02NAh", "fen": "5Q2/p1p4k/2b4p/4q1pP/2Ppp3/1P4p1/P4PB1/6K1 w - - 0 34", "sol": "g2h3", "rating": 2404, "themes": "crushing defensiveMove endgame master quietMove short", "set": "test"}, {"id": "016vg", "fen": "4r1k1/2R3p1/p3r2p/1p2P3/1q6/1P4P1/P3Q2P/4R1K1 b - - 0 31", "sol": "e6e5", "rating": 2084, "themes": "attraction crushing endgame fork veryLong", "set": "test"}, {"id": "00SUF", "fen": "1n6/1P6/5pp1/2k5/6PP/4P3/3K4/8 w - - 1 52", "sol": "h4h5", "rating": 1343, "themes": "crushing endgame knightEndgame long master", "set": "test"}, {"id": "00Keu", "fen": "R7/1p3kp1/2pK3p/3p1PP1/3r2nP/8/1P6/8 w - - 0 40", "sol": "g5g6", "rating": 882, "themes": "endgame mate mateIn2 short", "set": "test"}, {"id": "00xWV", "fen": "6k1/4b3/p4pPq/1p2p2P/2p3Q1/P7/1PP5/1K6 w - - 1 39", "sol": "g4e6", "rating": 1560, "themes": "crushing endgame fork master short", "set": "test"}, {"id": "00huB", "fen": "3r2k1/ppp1bppp/2n5/8/4P1b1/1P3N1P/PBP1P1P1/2K2B1R b - - 0 16", "sol": "g4f3", "rating": 1394, "themes": "crushing long middlegame", "set": "test"}, {"id": "00YhS", "fen": "7K/8/8/5p2/4kP2/6P1/8/8 b - - 0 62", "sol": "e4f3", "rating": 979, "themes": "crushing endgame long pawnEndgame", "set": "test"}, {"id": "02cCF", "fen": "8/5pk1/1PK5/R5pp/8/8/8/2r5 w - - 2 41", "sol": "a5c5", "rating": 2523, "themes": "advancedPawn clearance crushing defensiveMove endgame master rookEndgame veryLong", "set": "test"}, {"id": "03ASa", "fen": "8/6p1/pp5p/2p5/P1P1K1Pk/1P5P/8/8 b - - 0 49", "sol": "a6a5", "rating": 2663, "themes": "crushing defensiveMove endgame pawnEndgame quietMove veryLong", "set": "test"}, {"id": "00vf5", "fen": "r1b1kb1r/1pqpnppp/p1n1p3/8/2BNP3/P1N5/1PP2PPP/R1BQK2R w KQkq - 1 8", "sol": "d4b5", "rating": 2162, "themes": "crushing long opening sacrifice", "set": "test"}, {"id": "00e63", "fen": "r4r1k/pp4pp/2pp1b2/4p3/N2qP3/3Q4/PPP2PPP/3RR1K1 w - - 4 17", "sol": "d3b3", "rating": 1755, "themes": "advantage discoveredAttack middlegame short trappedPiece", "set": "test"}, {"id": "00DkJ", "fen": "3r1bnr/2p2ppp/2bk4/R7/5P2/2N5/4N1PP/1R4K1 w - - 4 22", "sol": "b1d1", "rating": 1575, "themes": "crushing deflection exposedKing long middlegame", "set": "test"}, {"id": "00ON5", "fen": "8/k1p5/P7/3N4/3P2pp/4K1n1/6P1/8 b - - 2 47", "sol": "h4h3", "rating": 1825, "themes": "advancedPawn crushing endgame knightEndgame long promotion", "set": "test"}, {"id": "00DZe", "fen": "8/5k2/7p/p1P1bPpP/Pp2P3/1P1p1K2/5B2/8 b - - 2 47", "sol": "g5g4", "rating": 2318, "themes": "bishopEndgame crushing deflection endgame long master skewer", "set": "test"}, {"id": "00Mke", "fen": "6k1/p2P1p2/8/6pp/P2Q4/5qPP/r4P1K/3R4 b - - 0 42", "sol": "a2f2", "rating": 1160, "themes": "crushing endgame long", "set": "test"}, {"id": "01DLY", "fen": "5rn1/1p3r1k/p5pp/4Q3/3P4/1N5P/PP4PK/R1B2q2 w - - 1 25", "sol": "c1h6", "rating": 1775, "themes": "crushing middlegame short", "set": "test"}, {"id": "00nji", "fen": "3R4/5ppk/2b4p/2b5/p1P5/P4P1P/6P1/5K2 w - - 5 37", "sol": "d8c8", "rating": 1142, "themes": "advantage endgame short", "set": "test"}, {"id": "00m6L", "fen": "8/8/k6p/p4p1P/K1p1pP2/2P1P3/1P6/8 b - - 0 49", "sol": "a6b6", "rating": 1370, "themes": "crushing defensiveMove endgame long pawnEndgame zugzwang", "set": "test"}, {"id": "00O9q", "fen": "5r2/5p2/4nP1k/4N1p1/8/6P1/6K1/R7 w - - 2 79", "sol": "a1h1", "rating": 1291, "themes": "endgame master mate mateIn1 oneMove", "set": "test"}, {"id": "01E12", "fen": "2k5/1pp1r2Q/pr2p3/3p1p2/q2b4/P2NP3/1PP3PP/K3RR2 w - - 0 26", "sol": "h7e7", "rating": 2093, "themes": "crushing hangingPiece middlegame short", "set": "test"}, {"id": "00qFT", "fen": "8/8/7p/3Bk1p1/P3p3/7P/8/6K1 b - - 0 41", "sol": "e5d5", "rating": 2669, "themes": "crushing endgame quietMove veryLong", "set": "test"}, {"id": "00bJi", "fen": "7k/1p2R3/p3N3/3p4/2n5/2PK4/PP5r/8 b - - 4 36", "sol": "h2d2", "rating": 1458, "themes": "endgame hookMate mate mateIn1 oneMove", "set": "test"}, {"id": "02vhe", "fen": "8/8/p7/1ppp2k1/4p1P1/P2P3K/1PP4P/8 b - - 0 41", "sol": "e4d3", "rating": 2781, "themes": "crushing defensiveMove endgame pawnEndgame veryLong", "set": "test"}, {"id": "00qD8", "fen": "8/1Q3R1p/p5pk/1p2q3/2p5/P6P/1b2r1P1/7K w - - 1 38", "sol": "f7h7", "rating": 1890, "themes": "advantage endgame long", "set": "test"}, {"id": "00Yqb", "fen": "8/6k1/4p1pq/1p1pPp2/p2P1n2/2P1QNP1/PP3P1P/5K2 b - - 0 39", "sol": "h6h3", "rating": 1161, "themes": "crushing endgame fork long", "set": "test"}, {"id": "00Vt0", "fen": "1k4r1/pp3p2/4p3/2N1q3/1P1bp3/P3P3/5P2/2RR1K2 w - - 2 28", "sol": "c5d7", "rating": 885, "themes": "advantage endgame fork short", "set": "test"}, {"id": "03mcu", "fen": "r7/P4R2/3p4/8/2P5/5p2/P3k3/6K1 b - - 1 61", "sol": "a8a7", "rating": 2439, "themes": "advancedPawn crushing deflection endgame exposedKing long master promotion rookEndgame sacrifice", "set": "test"}, {"id": "00DII", "fen": "2rr2k1/p5p1/1p5p/2pq1p1P/8/P4QR1/5PP1/4R1K1 w - - 0 32", "sol": "e1e8", "rating": 1790, "themes": "advantage endgame intermezzo long", "set": "test"}, {"id": "00j9Q", "fen": "rnb2r1k/2q2p1p/p2p1b2/1p2pp2/4P1QN/3B3R/PPP2PPP/R5K1 w - - 0 20", "sol": "h4f5", "rating": 2022, "themes": "advantage middlegame short", "set": "test"}, {"id": "00hNb", "fen": "5k2/pp3ppp/4p3/3p4/1Pn2q2/2P3P1/P3QnKP/R2R4 b - - 2 30", "sol": "c4e3", "rating": 1091, "themes": "crushing endgame fork short", "set": "test"}, {"id": "009BH", "fen": "3r3k/6p1/4Q3/4B3/1p3P2/4PKP1/3q4/8 w - - 18 52", "sol": "e6h6", "rating": 1513, "themes": "endgame mate mateIn2 pin short", "set": "test"}, {"id": "01JJc", "fen": "4k3/4P3/2p1KP1r/2N5/8/8/p7/8 w - - 5 43", "sol": "c5e4", "rating": 2120, "themes": "endgame mate mateIn2 quietMove short", "set": "test"}, {"id": "004Ys", "fen": "r4rk1/5pbp/p1n1p1p1/2p3NP/1p1q1B2/3P3Q/PPP3P1/R3R1K1 w - - 3 20", "sol": "f4e3", "rating": 2417, "themes": "advantage defensiveMove middlegame veryLong", "set": "test"}, {"id": "021Bw", "fen": "3rr1k1/1Bpq1p1p/p2b2p1/5b2/3B4/2P3P1/PP1Q1P1P/3RR1K1 b - - 0 20", "sol": "c7c5", "rating": 2410, "themes": "advantage discoveredAttack long middlegame", "set": "test"}, {"id": "00AOH", "fen": "6k1/8/1R2p1pp/4P3/p1N2P2/6PK/7P/1r6 b - - 0 48", "sol": "b1b6", "rating": 866, "themes": "advancedPawn advantage endgame long", "set": "test"}, {"id": "00Elq", "fen": "rn3q1r/4pk2/2pp1npp/p5Q1/1p1PPNP1/5P2/PPP5/R4KNR w - - 0 18", "sol": "g5g6", "rating": 832, "themes": "mate mateIn1 middlegame oneMove", "set": "test"}, {"id": "00tbH", "fen": "8/1q1r1k1p/p1p1p1p1/2p2pRn/Q1P2P1P/3PPP2/P2rK3/6R1 w - - 0 27", "sol": "e2d2", "rating": 1264, "themes": "advantage hangingPiece middlegame short", "set": "test"}, {"id": "00FON", "fen": "1k6/8/8/6p1/1pp4P/p4PP1/N1P5/7K b - - 0 38", "sol": "b4b3", "rating": 956, "themes": "crushing endgame knightEndgame short", "set": "test"}, {"id": "01WXF", "fen": "r1b2rk1/p4qbp/1pR2pp1/8/2pBPP2/1P3Q1P/P1B3P1/5RK1 b - - 1 23", "sol": "f7d7", "rating": 2674, "themes": "advantage fork long middlegame", "set": "test"}, {"id": "010Sa", "fen": "3r2k1/pb2q1r1/4p3/2p2p1Q/3p4/3R3R/PPP2P1P/5K2 w - - 2 27", "sol": "d3g3", "rating": 2672, "themes": "advantage attraction exposedKing middlegame skewer veryLong", "set": "test"}, {"id": "00ao5", "fen": "r3B2k/pp4pp/2n5/q1p3b1/2Q5/8/PPP2PbP/R4RK1 w - - 0 18", "sol": "c4f7", "rating": 2076, "themes": "advantage long middlegame", "set": "test"}, {"id": "00rEz", "fen": "r1bqk2r/ppp2ppp/3p4/4p3/2PBP2b/5Pn1/PP4PP/RN1QKB1R w KQkq - 0 10", "sol": "h2g3", "rating": 1507, "themes": "advantage long opening", "set": "test"}, {"id": "006RM", "fen": "1k1r3r/8/pp1n2p1/2q5/1Q6/3R2P1/PPP2P1P/3R2K1 w - - 5 30", "sol": "b4c5", "rating": 1445, "themes": "crushing long middlegame", "set": "test"}, {"id": "00XbN", "fen": "6k1/R4p1p/6P1/3p4/8/2b5/1r3rPP/5RK1 w - - 0 27", "sol": "g6f7", "rating": 2109, "themes": "advancedPawn advantage endgame short", "set": "test"}, {"id": "00XGg", "fen": "2k4r/ppp2ppr/2n5/3b1N2/3p1bP1/5NP1/PPP1QPK1/R3R3 b - - 2 20", "sol": "h7h2", "rating": 1804, "themes": "attraction mate mateIn4 middlegame operaMate pin sacrifice veryLong", "set": "test"}, {"id": "02cVu", "fen": "2rr2k1/1b5p/pq2pp1b/3nQ3/2B5/1P6/PB4PP/R4R1K w - - 0 23", "sol": "f1f6", "rating": 2507, "themes": "advantage long middlegame", "set": "test"}, {"id": "00eak", "fen": "4r1k1/5pp1/5n1p/P5r1/7q/1QP1p1PP/1P3P1K/R3RB2 b - - 1 27", "sol": "f6g4", "rating": 1937, "themes": "crushing middlegame pin short", "set": "test"}, {"id": "00lJm", "fen": "7k/ppp1nrp1/3pN3/7p/3P3P/2P2RK1/PP3QP1/1q5r w - - 0 27", "sol": "f3f7", "rating": 2032, "themes": "advantage hangingPiece middlegame short", "set": "test"}, {"id": "00NEO", "fen": "4qr2/pR4pk/2b2p1p/4pPP1/3bB3/3P3Q/P1r4P/4BR1K w - - 1 25", "sol": "h3h6", "rating": 1863, "themes": "mate mateIn2 middlegame pin short", "set": "test"}, {"id": "00nFD", "fen": "r4rk1/p1q2pb1/2p1b1pp/3np3/2B1N1PP/4BP2/PPP5/2KRQ2R b - - 0 16", "sol": "d5e3", "rating": 1303, "themes": "advantage master middlegame short", "set": "test"}, {"id": "02pFU", "fen": "r1k5/2p2Q2/1b3P2/1p2p1p1/8/2P4p/1PB1RPq1/4K3 w - - 1 33", "sol": "c2e4", "rating": 2829, "themes": "crushing endgame fork veryLong", "set": "test"}, {"id": "001pC", "fen": "r4rk1/pp3ppp/3b4/2p1pPB1/7N/2PP3n/PP4PP/R2Q2RK b - - 0 18", "sol": "h3f2", "rating": 848, "themes": "mate mateIn1 middlegame oneMove smotheredMate", "set": "test"}, {"id": "02eVV", "fen": "4r3/Q6p/6pk/3n1q2/4N3/2P2rPP/PP2R2K/4R3 b - - 2 30", "sol": "d5f4", "rating": 2555, "themes": "crushing long middlegame", "set": "test"}, {"id": "017u3", "fen": "r2q1rk1/4bppp/p3bn2/1p2N3/5B2/2N5/PP3PPP/R2QR1K1 w - - 2 20", "sol": "e5c6", "rating": 1919, "themes": "advantage kingsideAttack opening skewer veryLong", "set": "test"}, {"id": "00AbP", "fen": "6k1/pp3pp1/2p5/7b/4r2P/2P2N2/PP4K1/3R4 w - - 0 25", "sol": "d1d8", "rating": 804, "themes": "crushing endgame short", "set": "test"}, {"id": "0116f", "fen": "r3k1r1/2pq1p2/p2p1R2/4p1np/P1B1P1bP/2NPP3/2P3P1/R3Q1K1 b q - 0 19", "sol": "g5f3", "rating": 1927, "themes": "advantage kingsideAttack middlegame short", "set": "test"}, {"id": "00m47", "fen": "rn1r2k1/pp2qppp/2b1pn2/6B1/2B4N/8/PPP1QPPP/2KR3R w - - 8 16", "sol": "h4f5", "rating": 1913, "themes": "crushing middlegame short", "set": "test"}, {"id": "01FId", "fen": "2r5/1Q3p1k/6pp/p4q2/8/2P1R1R1/P2r1PK1/8 w - - 6 39", "sol": "e3f3", "rating": 1902, "themes": "crushing endgame short", "set": "test"}, {"id": "04Lge", "fen": "8/4b1pk/2R1P1qp/3p4/3P4/5P1P/4QP1K/1rN5 b - - 6 43", "sol": "e7d6", "rating": 2716, "themes": "crushing endgame veryLong", "set": "test"}, {"id": "01PlY", "fen": "r5k1/p4p1p/1p1R2n1/4p1Q1/1P2qn2/P7/1B3PP1/R5K1 b - - 1 24", "sol": "h7h6", "rating": 2110, "themes": "crushing long middlegame", "set": "test"}, {"id": "00v6q", "fen": "2Qqk3/5pp1/2pr4/2Np4/3P4/7P/P1P3P1/6K1 w - - 5 35", "sol": "c5b7", "rating": 1940, "themes": "crushing endgame fork long master sacrifice", "set": "test"}] — вставит генератор (200 задач: 100 train + 100 test, сплит по MD5 как в common.hash_split) */
+var EMBEDDED = [{"id": "00uid", "fen": "r2qkbr1/pp2pp1p/5n2/2p1Nb2/2Q5/4B3/PP1N1PPP/n2K1B1R w q - 0 13", "sol": "c4f7", "rating": 1217, "themes": "attackingF2F7 mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "00AcQ", "fen": "8/1bpp2k1/1p5r/1P2P3/3P1P2/2P1n1K1/Q5P1/8 b - - 1 30", "sol": "h6g6", "rating": 1741, "themes": "crushing endgame short", "set": "train"}, {"id": "001u3", "fen": "2r3k1/p4pp1/Qq2p2p/b1Np4/2nP1P2/4P1P1/5K1P/2B1N3 w - - 4 34", "sol": "a6c8", "rating": 2190, "themes": "advantage hangingPiece middlegame short", "set": "train"}, {"id": "0191t", "fen": "6k1/1p3r2/p1p1p3/4Pqpp/3P4/1P2R1QP/P4PP1/6K1 b - - 1 33", "sol": "h5h4", "rating": 1783, "themes": "crushing discoveredAttack endgame long", "set": "train"}, {"id": "00Ngg", "fen": "3qk2r/1p1bbppp/4pn2/1BPp1n2/3P4/4PN2/4QPPP/BN2K2R b Kk - 2 15", "sol": "d8a5", "rating": 1471, "themes": "advantage fork middlegame short", "set": "train"}, {"id": "00LOy", "fen": "5k2/1p3pp1/p3p3/r3b3/2P2B2/1P6/1PR1K1PP/8 w - - 1 34", "sol": "b3b4", "rating": 1476, "themes": "crushing endgame short", "set": "train"}, {"id": "00JfN", "fen": "r6r/1bpnk3/1p1pB3/pP1P4/P3PQP1/2b2N1q/2P2P2/R3R1K1 w - - 0 25", "sol": "f4f7", "rating": 971, "themes": "mate mateIn2 middlegame short", "set": "train"}, {"id": "00CbV", "fen": "2r3k1/5p2/p3p1nQ/3pPP2/2qN4/6BP/7K/4b3 w - - 0 34", "sol": "f5f6", "rating": 2479, "themes": "crushing middlegame veryLong", "set": "train"}, {"id": "018Ap", "fen": "8/8/k6p/5Kp1/4Pp2/5B2/2r3PP/8 w - - 0 48", "sol": "e4e5", "rating": 2288, "themes": "crushing endgame long master quietMove", "set": "train"}, {"id": "009Wc", "fen": "1r3rk1/1pqN1pbp/p1p1pnp1/2N5/3P4/1QP5/PP3PPP/3RR1K1 b - - 3 19", "sol": "f6d7", "rating": 1076, "themes": "crushing middlegame short", "set": "train"}, {"id": "0109N", "fen": "r2qkbnr/1p2pppp/p1n5/4N3/2BP4/8/PP3PPP/RNBb1RK1 w kq - 0 9", "sol": "c4f7", "rating": 1215, "themes": "attackingF2F7 mate mateIn1 oneMove opening", "set": "train"}, {"id": "018eM", "fen": "r3k2r/1p1bbpp1/pq3p1p/3p4/3P4/2N2N2/PPP1QPPP/R3K2R w KQkq - 2 12", "sol": "e2e7", "rating": 2162, "themes": "advantage attraction fork long middlegame sacrifice", "set": "train"}, {"id": "02Oku", "fen": "r2qk2r/p2nbppp/2nN4/2p1p3/8/3Q4/PPPP1PPP/RNB1K2R b KQkq - 1 14", "sol": "e7d6", "rating": 2536, "themes": "advantage opening short", "set": "train"}, {"id": "00kZF", "fen": "r3r3/1p1n2pk/2p1p2p/2P5/1p2R3/P2Q1N1P/5PP1/q5K1 w - - 0 25", "sol": "e4e1", "rating": 1307, "themes": "crushing discoveredAttack discoveredCheck middlegame short", "set": "train"}, {"id": "006wz", "fen": "2r5/4ppkp/6p1/1p6/1P6/P3B3/1br2PPP/1R1R2K1 w - - 3 23", "sol": "b1b2", "rating": 1426, "themes": "attraction crushing endgame fork long sacrifice", "set": "train"}, {"id": "00p93", "fen": "1k1r1b1r/n1p3p1/p3n1p1/1p2P3/P2B2Pq/2P2Q1P/1PB1K3/R6R w - - 1 25", "sol": "d4a7", "rating": 1852, "themes": "crushing long middlegame pin queensideAttack", "set": "train"}, {"id": "00agR", "fen": "8/5pp1/p4n1p/1p2k3/8/1PK1P2P/P1B2P2/8 b - - 0 31", "sol": "f6e4", "rating": 1807, "themes": "crushing endgame short", "set": "train"}, {"id": "002O7", "fen": "r3qrk1/2p2pp1/p2bpn1p/2ppN3/3P1Pb1/1PP1P1B1/P2N2PP/R2Q1RK1 w - - 1 15", "sol": "e5g4", "rating": 1008, "themes": "crushing middlegame short", "set": "train"}, {"id": "002KJ", "fen": "r3k2r/ppq1bppp/4pn2/2Ppn3/1P4bP/2P2N2/P3BPP1/RNBQ1RK1 w kq - 3 11", "sol": "f3e5", "rating": 1569, "themes": "crushing discoveredAttack middlegame short", "set": "train"}, {"id": "007eS", "fen": "6k1/p4p2/1p5p/4r3/P3B3/1P2KP2/2P3PP/8 b - - 1 29", "sol": "f7f5", "rating": 1197, "themes": "advantage endgame short", "set": "train"}, {"id": "00JH5", "fen": "8/2Q2pk1/8/3pp2P/2q5/2P5/KP6/8 w - - 2 37", "sol": "c7c4", "rating": 2082, "themes": "crushing defensiveMove endgame queenEndgame short", "set": "train"}, {"id": "00Kd8", "fen": "3R4/3P4/8/5p2/5kPp/8/3r2P1/6K1 b - - 2 64", "sol": "f4g3", "rating": 2133, "themes": "advantage endgame rookEndgame short", "set": "train"}, {"id": "00hCU", "fen": "r1b2r2/1p5k/2Pp2pp/p2Bb3/2Pp1p2/P2P2Pq/3B1P1P/1R1QR1K1 b - - 0 26", "sol": "f4g3", "rating": 2789, "themes": "attraction crushing deflection kingsideAttack long middlegame sacrifice", "set": "train"}, {"id": "00qHr", "fen": "8/5p2/p2Rpkpn/N7/P4P2/4P1K1/r4P1P/8 b - - 2 36", "sol": "h6f5", "rating": 841, "themes": "advantage endgame fork master short", "set": "train"}, {"id": "002CP", "fen": "r5k1/pp4pp/4p1q1/4p3/3n4/P3Q1P1/1PP4P/2KR1R2 b - - 5 24", "sol": "g6c2", "rating": 923, "themes": "endgame mate mateIn1 oneMove queensideAttack", "set": "train"}, {"id": "00liA", "fen": "8/3K4/r7/6k1/6p1/6Pp/3R3P/8 w - - 3 55", "sol": "d2d5", "rating": 925, "themes": "crushing defensiveMove endgame rookEndgame veryLong", "set": "train"}, {"id": "00HqY", "fen": "8/6p1/8/8/4P2k/5KpP/8/8 w - - 4 47", "sol": "f3g2", "rating": 1802, "themes": "crushing endgame master pawnEndgame short zugzwang", "set": "train"}, {"id": "0158C", "fen": "3r3k/1Qp3p1/p4q1p/8/3N4/8/PPP2PPP/2K1R3 b - - 0 23", "sol": "f6d4", "rating": 1686, "themes": "crushing endgame fork long", "set": "train"}, {"id": "00wiq", "fen": "8/2N5/8/1p4p1/1P3k1p/P4b1P/5K2/8 w - - 0 54", "sol": "c7e6", "rating": 2092, "themes": "crushing deflection endgame veryLong", "set": "train"}, {"id": "012Fl", "fen": "2b2k2/2q2p2/p1p2Ppr/4p3/2r1B3/5Q2/P1P4P/R2R3K w - - 0 25", "sol": "f3e3", "rating": 2537, "themes": "crushing master middlegame short", "set": "train"}, {"id": "04BOH", "fen": "r3r1k1/pp3p1p/2pn2p1/6B1/6P1/P4Q1P/1qP5/R4R1K w - - 1 23", "sol": "a1d1", "rating": 2783, "themes": "crushing middlegame veryLong", "set": "train"}, {"id": "00aYp", "fen": "2rq1r2/p1n1bpk1/1p2p1pN/3nP2p/3P3P/P2Q1N2/1P4P1/RBB3K1 w - - 2 22", "sol": "h6f7", "rating": 1737, "themes": "crushing master middlegame short", "set": "train"}, {"id": "00JO7", "fen": "5rk1/pp4pR/4p1r1/2qp4/8/2P4Q/PP3RPP/6K1 w - - 1 23", "sol": "h7h8", "rating": 986, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "00cud", "fen": "8/5p2/6p1/1p1N1k2/1P1K4/2P3P1/8/5b2 w - - 1 49", "sol": "d5e3", "rating": 959, "themes": "crushing endgame fork master short", "set": "train"}, {"id": "00oxX", "fen": "r1q2rk1/1R1b1pp1/2n2n1p/3p1B2/2pP1B2/5N2/2Q2PPP/1R4K1 w - - 5 23", "sol": "f5d7", "rating": 2198, "themes": "advantage middlegame short", "set": "train"}, {"id": "00Nua", "fen": "8/1p1k2r1/p1p5/2P1R3/PP1pP3/3r4/5RPK/8 b - - 0 31", "sol": "g7h7", "rating": 1841, "themes": "endgame", "set": "train"}, {"id": "01VHY", "fen": "2k5/p1p5/P7/1PP1r3/5p1p/6pP/6P1/2R3K1 w - - 0 40", "sol": "b5b6", "rating": 2798, "themes": "advancedPawn crushing defensiveMove endgame long rookEndgame", "set": "train"}, {"id": "01wOR", "fen": "8/7p/1k6/2p3p1/4p1P1/1PK1Pp1P/5P2/8 w - - 1 47", "sol": "c3c4", "rating": 2184, "themes": "crushing defensiveMove endgame pawnEndgame veryLong", "set": "train"}, {"id": "000aY", "fen": "r4rk1/pp2Bppp/2n1b3/q1pp4/8/P1Q2NP1/1PP1PP1P/2KR3R b - - 1 15", "sol": "a5c3", "rating": 1412, "themes": "advantage master middlegame short", "set": "train"}, {"id": "01Bxs", "fen": "r2q1rk1/3b1pbp/pppQ4/5P2/3B2n1/1BN5/PPP3PP/R4RK1 b - - 1 17", "sol": "d8b8", "rating": 2481, "themes": "advantage long middlegame", "set": "train"}, {"id": "01UHL", "fen": "r6k/1p1R1Q2/p4b2/P4bqp/5Rp1/1P3P2/5P2/5BK1 b - - 2 34", "sol": "g4f3", "rating": 2227, "themes": "crushing discoveredAttack long middlegame quietMove", "set": "train"}, {"id": "00Enl", "fen": "2kr4/1pp5/p1b4R/2PpP3/3B2p1/2P1Q1Pp/PPq4P/5RK1 b - - 0 27", "sol": "c2g2", "rating": 831, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "011zd", "fen": "r4rk1/Rq3ppp/1n2p3/Q2pN3/2pP4/4P3/1PP2PPP/R5K1 b - - 0 19", "sol": "a8a7", "rating": 1732, "themes": "advantage long middlegame", "set": "train"}, {"id": "043sf", "fen": "2r2rk1/1p5p/p3p1pP/3p4/3P1qP1/PP1R2QR/5PK1/8 b - - 3 38", "sol": "f4e4", "rating": 2422, "themes": "crushing endgame long pin", "set": "train"}, {"id": "00TQf", "fen": "4r1k1/p1R1n2p/4N3/5r2/6K1/6PP/P3R3/8 b - - 4 46", "sol": "h7h5", "rating": 1204, "themes": "endgame mate mateIn2 short", "set": "train"}, {"id": "03fqJ", "fen": "8/4k3/4p3/3pP2K/3P2PP/4P3/8/3n4 b - - 0 41", "sol": "e7f7", "rating": 2693, "themes": "crushing endgame knightEndgame short", "set": "train"}, {"id": "00EUu", "fen": "8/5P1P/1p4Kr/8/6P1/8/2p5/k7 w - - 1 63", "sol": "g6h6", "rating": 2529, "themes": "crushing defensiveMove endgame long", "set": "train"}, {"id": "00J5q", "fen": "8/5Qpk/4p3/1p6/8/pq1bB2P/5PP1/6K1 w - - 0 33", "sol": "e3d4", "rating": 2201, "themes": "crushing endgame short", "set": "train"}, {"id": "01Dor", "fen": "8/3k2P1/3PQ3/p1q2p2/1p6/1P4r1/P1P5/1K1R4 b - - 0 39", "sol": "d7e6", "rating": 2192, "themes": "crushing endgame hangingPiece long master", "set": "train"}, {"id": "00T2k", "fen": "2k5/p3qp2/bpp1p1p1/4r3/P4n1p/5P2/BPQ2B1P/1K1R4 w - - 0 31", "sol": "c2c6", "rating": 1583, "themes": "advantage long middlegame queensideAttack", "set": "train"}, {"id": "04GC9", "fen": "r2r3k/1pp3q1/2n1Q3/p2n4/8/P3PP2/1P1BB3/1R2K3 w - - 0 31", "sol": "e1f2", "rating": 2765, "themes": "advantage exposedKing fork middlegame pin sacrifice veryLong", "set": "train"}, {"id": "007QU", "fen": "2rq1rk1/1b5p/p3p3/1p1pBpp1/2nP2N1/1RP1PP2/P1Q3PP/3R2K1 w - - 0 23", "sol": "g4h6", "rating": 1144, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "00WqT", "fen": "r4r2/1ppb1p2/p2p2p1/5P1k/4P3/2PBB1R1/PKP2P1q/8 w - - 5 27", "sol": "d3e2", "rating": 1592, "themes": "mate mateIn2 middlegame short", "set": "train"}, {"id": "008Y3", "fen": "r5k1/1p1r1pp1/p3pnp1/2qN4/8/1Q5P/PP3PP1/3RR1K1 w - - 0 25", "sol": "d5f6", "rating": 1054, "themes": "advantage discoveredAttack kingsideAttack master middlegame short", "set": "train"}, {"id": "00UwP", "fen": "5rk1/p4pp1/3qb2p/1B1p4/3P4/Q3PN2/P4PPP/1rR3K1 w - - 6 20", "sol": "a3d6", "rating": 1184, "themes": "advantage master middlegame short", "set": "train"}, {"id": "01oyD", "fen": "r3kq1N/ppp4Q/4b1p1/3B4/3n4/8/PPPP1bPP/RNB2K1R b q - 0 13", "sol": "e6d5", "rating": 2372, "themes": "crushing defensiveMove middlegame short", "set": "train"}, {"id": "00TiV", "fen": "8/1kp5/4n3/3p4/r2P3R/2K2N1P/8/8 b - - 6 48", "sol": "a4a3", "rating": 1135, "themes": "crushing endgame short skewer", "set": "train"}, {"id": "00qb9", "fen": "8/8/2k5/1p6/1Pp1K3/2P5/8/8 w - - 3 55", "sol": "e4e5", "rating": 1773, "themes": "crushing endgame pawnEndgame short", "set": "train"}, {"id": "00MYL", "fen": "1R6/5Q2/p1kb1p2/2r1p3/3n4/P6P/5PP1/4qBK1 w - - 2 41", "sol": "f7b7", "rating": 1100, "themes": "mate mateIn1 middlegame oneMove", "set": "train"}, {"id": "01UYy", "fen": "3k4/1K1B4/4p2p/2P1Pp2/5n2/8/7P/8 b - - 0 51", "sol": "f4d3", "rating": 2236, "themes": "crushing defensiveMove endgame long master", "set": "train"}, {"id": "0039T", "fen": "1r5r/p3kp2/4p2p/4P3/R4Pp1/6P1/P1P4P/4K2R b K - 2 25", "sol": "b8b1", "rating": 1121, "themes": "crushing defensiveMove endgame long rookEndgame skewer", "set": "train"}, {"id": "016e7", "fen": "6r1/p6p/1p1ppk1r/5p2/2PPnp2/3N3P/PP2RPPK/3R4 b - - 1 31", "sol": "f4f3", "rating": 2071, "themes": "advantage endgame master short", "set": "train"}, {"id": "00e6Q", "fen": "5r2/pppk2pp/3p1r2/8/3PPn2/2P2Pq1/PP2B2P/R3KR2 w Q - 0 22", "sol": "h2g3", "rating": 1540, "themes": "advantage middlegame short", "set": "train"}, {"id": "00jhH", "fen": "r7/2p1kp2/3p1np1/1p2p1N1/4P3/2PP2P1/1P3QPK/8 b - - 5 29", "sol": "f6g4", "rating": 913, "themes": "crushing endgame fork short", "set": "train"}, {"id": "00BNd", "fen": "1rr3k1/4ppbp/3p1np1/1b1N4/P2BP3/5P2/P2R2PP/R5K1 w - - 0 22", "sol": "d5e7", "rating": 1026, "themes": "advantage fork middlegame short", "set": "train"}, {"id": "02yET", "fen": "2r3k1/1R6/3B1p2/1PnPp3/4PpPp/5PbP/6r1/1K1R4 w - - 1 44", "sol": "d6c5", "rating": 2727, "themes": "advancedPawn crushing master middlegame quietMove sacrifice veryLong", "set": "train"}, {"id": "00WlQ", "fen": "2r1r1k1/pp3pp1/4bb1p/2qN4/Q7/1P1RPN2/P4PPP/3R2K1 b - - 0 19", "sol": "e6d5", "rating": 1756, "themes": "crushing middlegame short", "set": "train"}, {"id": "0061g", "fen": "6k1/pp3pp1/2p1q1Pp/3b4/8/6Q1/PB3Pp1/3r1NK1 w - - 0 28", "sol": "g3b8", "rating": 801, "themes": "endgame mate mateIn2 short", "set": "train"}, {"id": "00l68", "fen": "6Q1/q1k5/3pB1p1/2pP1p2/2P2P2/rp2PK1P/8/8 w - - 3 38", "sol": "g8c8", "rating": 1382, "themes": "endgame long mate mateIn3", "set": "train"}, {"id": "00P45", "fen": "3r1r2/p1p2p1k/1p3Ppp/4p2P/3qBQ2/8/PPP3P1/5R1K w - - 0 28", "sol": "h5g6", "rating": 2496, "themes": "advantage endgame veryLong", "set": "train"}, {"id": "01hYA", "fen": "r7/2P4p/3K2p1/3p1p2/pP5P/Rbk1P1P1/8/8 w - - 1 52", "sol": "b4b5", "rating": 2197, "themes": "crushing endgame master quietMove short", "set": "train"}, {"id": "00t2W", "fen": "r3r1k1/p4ppp/2p5/5q2/2RPn3/3Q1PB1/P5PP/4R1K1 b - - 0 27", "sol": "e4g3", "rating": 1355, "themes": "crushing long middlegame", "set": "train"}, {"id": "00s9L", "fen": "2rqr1k1/5pp1/Rb5p/1p2p3/3pP3/1N1P1PP1/3Q1P2/2R3K1 w - - 1 26", "sol": "c1c8", "rating": 1142, "themes": "advantage middlegame short", "set": "train"}, {"id": "02BFi", "fen": "8/7p/4k1p1/4B2P/p1Pp4/1p1K3P/1P3P2/8 b - - 0 35", "sol": "e6e5", "rating": 2968, "themes": "crushing endgame hangingPiece veryLong", "set": "train"}, {"id": "01uCs", "fen": "1r5r/2p2ppp/Q5b1/5k2/4p3/2P5/P1PR1PqP/2K3NR w - - 0 18", "sol": "d2d5", "rating": 2685, "themes": "advantage long middlegame", "set": "train"}, {"id": "00VGt", "fen": "3K4/8/2P5/R5pp/1n6/5PkP/6P1/8 b - - 4 61", "sol": "b4c6", "rating": 1061, "themes": "crushing endgame fork short", "set": "train"}, {"id": "00nxI", "fen": "r3kbnr/p5pp/2pp2q1/4n2b/2P1Pp2/P1N2N1P/4BP1R/1RBQK3 w kq - 0 22", "sol": "f3e5", "rating": 1948, "themes": "advantage long middlegame", "set": "train"}, {"id": "00HEh", "fen": "3r2k1/pp3ppp/2p3b1/2n3P1/2B2q1P/5N2/PPP1QP2/4R1K1 w - - 0 24", "sol": "e2e8", "rating": 812, "themes": "kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "train"}, {"id": "012uN", "fen": "8/p2n1k2/5P2/5KPP/2P5/2n5/8/8 w - - 2 50", "sol": "g5g6", "rating": 1929, "themes": "crushing endgame knightEndgame short", "set": "train"}, {"id": "0055Y", "fen": "r1b2rk1/p3pp2/2B5/2Qpq3/3N2pp/4b3/2P2PPP/1R2K2R w K - 0 24", "sol": "f2e3", "rating": 2055, "themes": "advantage defensiveMove middlegame short", "set": "train"}, {"id": "003eP", "fen": "6k1/r1b1q3/2p3p1/2Pp4/1P2p1n1/2B1P3/NQ6/2K4R w - - 2 37", "sol": "h1h8", "rating": 1156, "themes": "crushing exposedKing long middlegame skewer", "set": "train"}, {"id": "00yP0", "fen": "2r1r1k1/2q4p/4pp1Q/p2p3R/3P4/2P4P/P4PP1/6K1 w - - 1 28", "sol": "h6f6", "rating": 1412, "themes": "advantage endgame long pin", "set": "train"}, {"id": "00KRo", "fen": "4r3/pp1b2pp/8/2pPkpK1/2P1p2P/2P3P1/P3R3/2B5 w - - 3 27", "sol": "c1f4", "rating": 894, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "01ICu", "fen": "8/5B2/8/8/5k2/2n1p3/Pr3P1P/R4K2 b - - 1 38", "sol": "b2f2", "rating": 2148, "themes": "crushing defensiveMove endgame long", "set": "train"}, {"id": "00Oqz", "fen": "5r2/7r/2kpqBRP/p1p1p2Q/P3P3/2PP4/5P1K/8 b - - 1 40", "sol": "f8f6", "rating": 904, "themes": "crushing endgame master short", "set": "train"}, {"id": "0068B", "fen": "r1q3k1/3nbppp/pp2p3/4B3/8/2N2Q2/PPPR1PPP/6K1 w - - 1 19", "sol": "d2d7", "rating": 1459, "themes": "crushing deflection middlegame short", "set": "train"}, {"id": "01rio", "fen": "8/8/8/p1pp4/4kPp1/1K4P1/P1P5/8 w - - 0 36", "sol": "a2a3", "rating": 2612, "themes": "crushing endgame pawnEndgame quietMove short zugzwang", "set": "train"}, {"id": "03z2J", "fen": "8/q4k2/2p1pbp1/2p1p1B1/2P1PpPK/3P1P2/1Q6/8 w - - 2 39", "sol": "g5f6", "rating": 2406, "themes": "advantage attraction deflection endgame veryLong", "set": "train"}, {"id": "01vUA", "fen": "r5k1/p1pN1r1p/1p2pppP/8/8/2B5/PPP3b1/2K2R1R w - - 2 24", "sol": "d7f6", "rating": 2036, "themes": "advantage kingsideAttack middlegame short", "set": "train"}, {"id": "009FS", "fen": "r2qr1k1/p5bp/1pp1N1p1/8/2Q2p2/2P1n2P/PP3PP1/R1B1RNK1 b - - 0 18", "sol": "e3c4", "rating": 1712, "themes": "crushing discoveredAttack opening short", "set": "train"}, {"id": "03Mp8", "fen": "r4rk1/1pp2p1p/5RpP/p3P3/8/2Q5/qPP5/2KR4 w - - 0 26", "sol": "e5e6", "rating": 2420, "themes": "crushing endgame sacrifice veryLong", "set": "train"}, {"id": "03Tly", "fen": "r4r2/ppqn1pbk/2pp2pB/4n3/3pP2N/1B6/PPPQ2PP/R4RK1 w - - 4 18", "sol": "h6g7", "rating": 2445, "themes": "crushing middlegame short", "set": "train"}, {"id": "00dRh", "fen": "1q5k/1b2Q1pp/pb3p2/1p6/1P2P3/PB3n2/5PKP/3RR3 b - - 1 25", "sol": "b8h2", "rating": 1843, "themes": "crushing middlegame short", "set": "train"}, {"id": "00u3h", "fen": "8/2p2r1p/1p4pk/p2PQ3/2P3P1/1P1q1B1P/P1n3K1/8 w - - 8 42", "sol": "g4g5", "rating": 1213, "themes": "endgame mate mateIn1 oneMove", "set": "train"}, {"id": "01iEi", "fen": "8/8/4pk2/p1p4p/Pp1pKP2/1P1P3P/2P5/8 b - - 0 38", "sol": "h5h4", "rating": 2219, "themes": "crushing defensiveMove endgame pawnEndgame quietMove veryLong zugzwang", "set": "train"}, {"id": "00VlM", "fen": "1k6/1p2rp1p/1p4b1/1N1B4/2P2R2/3p3P/P2Rr3/2K5 b - - 0 34", "sol": "e2e1", "rating": 2348, "themes": "advantage clearance deflection exposedKing middlegame veryLong", "set": "train"}, {"id": "00F1l", "fen": "8/2k1b3/5p2/RBpK1Pp1/P2p2P1/1p1P4/2r5/8 w - - 0 46", "sol": "a5a7", "rating": 836, "themes": "crushing endgame master short skewer", "set": "train"}, {"id": "00WJN", "fen": "5Q2/7K/8/8/4p2P/3k2q1/8/8 w - - 2 54", "sol": "f8a3", "rating": 1324, "themes": "crushing endgame queenEndgame short skewer", "set": "train"}, {"id": "00UOA", "fen": "6k1/5p1p/4p1p1/p2p4/2rb1P2/P3B1P1/1P2R1KP/8 w - - 0 31", "sol": "b2b3", "rating": 1657, "themes": "advantage endgame short", "set": "train"}, {"id": "00IYg", "fen": "r1b2r2/pp2n1p1/1qn1ppk1/3pP1N1/3P3P/P7/1P1Q1PP1/RN2K2R w KQ - 0 14", "sol": "h4h5", "rating": 1720, "themes": "advantage discoveredAttack discoveredCheck long middlegame", "set": "train"}, {"id": "00zOQ", "fen": "2r3k1/p7/7p/1p4p1/6R1/3B1q1P/2P3RP/2B4K b - - 7 35", "sol": "c8e8", "rating": 1925, "themes": "advantage deflection endgame long quietMove", "set": "test"}, {"id": "00OQt", "fen": "8/8/8/p3b3/P1B2p1K/1Pk1p2P/6P1/8 b - - 0 50", "sol": "c3d2", "rating": 1709, "themes": "advancedPawn bishopEndgame crushing endgame long", "set": "test"}, {"id": "013vX", "fen": "2k5/2p2p2/P1N3p1/1PK2n2/8/7p/2P2P2/8 w - - 0 42", "sol": "b5b6", "rating": 2634, "themes": "advancedPawn crushing endgame knightEndgame long", "set": "test"}, {"id": "03fw0", "fen": "8/5pp1/7p/RB2k3/P3n1PK/1r3P1P/8/8 b - - 2 42", "sol": "e5f4", "rating": 2532, "themes": "crushing endgame long quietMove", "set": "test"}, {"id": "011RD", "fen": "7r/2p2k2/1p6/p3R2r/P2Q1pb1/2P5/q1PK1PP1/6R1 w - - 1 39", "sol": "d4f4", "rating": 1694, "themes": "crushing exposedKing fork long master middlegame", "set": "test"}, {"id": "00wPZ", "fen": "r1b2rk1/ppp2ppp/8/1B1p4/3bn3/5N2/PPP2qPP/RNBQR2K b - - 1 12", "sol": "f2g1", "rating": 1394, "themes": "kingsideAttack mate mateIn2 opening sacrifice short smotheredMate", "set": "test"}, {"id": "007AS", "fen": "1r2kb1r/3nnpp1/4p1bp/1NppP3/3P4/6N1/P2BBPPP/R3K2R w KQk - 1 18", "sol": "b5d6", "rating": 1582, "themes": "crushing master middlegame short", "set": "test"}, {"id": "00s9T", "fen": "8/8/p5pp/2k5/2p3PP/2K2P2/P7/8 b - - 0 41", "sol": "g6g5", "rating": 2062, "themes": "crushing endgame pawnEndgame short", "set": "test"}, {"id": "00uAh", "fen": "r1q3k1/1pb3pp/p1b5/3p1pB1/4N1NQ/8/PPP2PPP/2K5 w - - 0 22", "sol": "g4f6", "rating": 2250, "themes": "crushing kingsideAttack long middlegame", "set": "test"}, {"id": "00Gz6", "fen": "r7/p4kp1/1p4p1/2qNn3/Q7/4PP2/PP3K2/6R1 w - - 1 26", "sol": "a4f4", "rating": 2253, "themes": "crushing endgame fork long pin", "set": "test"}, {"id": "00lhJ", "fen": "3q3k/8/3PQ2p/p3n1r1/P1P4b/2N1p2P/1r6/R5RK w - - 0 33", "sol": "e6h6", "rating": 2446, "themes": "crushing fork middlegame veryLong", "set": "test"}, {"id": "01Amj", "fen": "8/8/8/2p1K3/p7/1k6/8/2B5 b - - 2 54", "sol": "a4a3", "rating": 2019, "themes": "bishopEndgame crushing defensiveMove endgame long", "set": "test"}, {"id": "00Mf0", "fen": "2kr3r/pp1b1p2/2n1p2q/2Pp4/5Np1/1QP3P1/P4PBP/R4RK1 w - - 5 20", "sol": "f1b1", "rating": 2380, "themes": "advantage long master middlegame quietMove", "set": "test"}, {"id": "00GBX", "fen": "r6k/pp2n1pp/2nN4/4p1r1/1PB5/2P4b/P3Nb1P/R2R3K w - - 0 23", "sol": "d6f7", "rating": 864, "themes": "advantage discoveredAttack discoveredCheck fork middlegame short", "set": "test"}, {"id": "00eNe", "fen": "4r1k1/p1p2ppp/2p1r3/3q4/P2B4/1P1P4/2Q2PPP/2R1R1K1 b - - 0 21", "sol": "e6e1", "rating": 910, "themes": "kingsideAttack mate mateIn2 middlegame short", "set": "test"}, {"id": "00XAG", "fen": "3r2k1/p3ppb1/b3q1pp/2p5/2N5/1r1RB3/P4PPP/2R1N1K1 w - - 0 22", "sol": "d3d8", "rating": 1901, "themes": "advantage hangingPiece intermezzo master middlegame short", "set": "test"}, {"id": "00Or5", "fen": "r2qkbnr/pp5p/8/4Nb2/8/1Qp5/PP2PPPP/R3KB1R w KQkq - 0 13", "sol": "b3f7", "rating": 1435, "themes": "mate mateIn1 oneMove opening", "set": "test"}, {"id": "03RCx", "fen": "4r3/p2RP3/2kP4/7p/8/5pr1/5R2/1K6 w - - 1 53", "sol": "d7d8", "rating": 2793, "themes": "advancedPawn clearance crushing defensiveMove endgame exposedKing promotion rookEndgame veryLong", "set": "test"}, {"id": "00unD", "fen": "2kr1bnr/2p2p1p/1p1q2pP/p3N3/P2P4/4B3/1PP2Pb1/RN1QK2R w KQ - 0 17", "sol": "d1g4", "rating": 1519, "themes": "crushing fork middlegame short", "set": "test"}, {"id": "01243", "fen": "r7/pp1Qp1B1/3b4/3k4/4q3/8/PP3PP1/5K2 w - - 5 35", "sol": "d7b7", "rating": 1561, "themes": "crushing deflection endgame fork master short skewer", "set": "test"}, {"id": "00nZE", "fen": "r1b1r3/pp1p1p1k/2n2Bp1/2p1qp2/2B1P3/3P1R2/PPP3PP/R5K1 w - - 0 17", "sol": "f3h3", "rating": 1052, "themes": "mate mateIn2 middlegame operaMate short", "set": "test"}, {"id": "00L1Y", "fen": "3rkb1r/pp2pbpp/2p5/q7/1Q3B2/2P3P1/PP2PP1P/RN2K2R b KQk - 1 15", "sol": "a5d5", "rating": 1847, "themes": "advantage long middlegame", "set": "test"}, {"id": "011cm", "fen": "k7/pn1R1pp1/8/2P2q1p/Q2p3P/5P2/P4PK1/4r3 w - - 1 41", "sol": "a4c6", "rating": 2380, "themes": "endgame equality long", "set": "test"}, {"id": "00TJN", "fen": "r3r1k1/pp3pB1/2q3pp/3R4/8/P4Q2/BP3PPP/1b4K1 w - - 0 24", "sol": "f3f7", "rating": 1800, "themes": "attraction doubleCheck kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "test"}, {"id": "01rPb", "fen": "7r/pQ3pk1/1np3p1/3p4/3P1NK1/1P2r1P1/P4q2/2R1R3 w - - 0 30", "sol": "e1e3", "rating": 2481, "themes": "advantage middlegame short", "set": "test"}, {"id": "01Pkf", "fen": "r2q1rk1/3pb1pp/1p1Npn2/pB1bB3/3P3P/PQ6/1P3P2/R3K1R1 w Q - 2 21", "sol": "b3g3", "rating": 2540, "themes": "crushing long middlegame sacrifice", "set": "test"}, {"id": "01S0o", "fen": "rq3rk1/p1Nn1p2/1pQ1p2p/4P1p1/2P3n1/8/PP3PPP/R3KB1R b KQ - 0 17", "sol": "d7e5", "rating": 2400, "themes": "crushing defensiveMove middlegame veryLong", "set": "test"}, {"id": "005jJ", "fen": "r1b1qrk1/pp1n1pbp/2pp1np1/4P3/2P2B2/2NBPN1P/PP3PP1/R2Q1RK1 b - - 0 10", "sol": "d6e5", "rating": 1215, "themes": "advantage opening short", "set": "test"}, {"id": "00LZf", "fen": "r1b1kb1r/pppp1ppp/2n1p3/4N3/3P2q1/4n3/PPP1BPPP/RN1Q1RK1 w kq - 0 9", "sol": "f2e3", "rating": 2156, "themes": "advantage attackingF2F7 fork long opening", "set": "test"}, {"id": "01jCT", "fen": "4r1k1/ppR2ppp/8/4r3/8/2P2Q2/PPq2PPP/R4K2 b - - 4 23", "sol": "e5f5", "rating": 2316, "themes": "advantage endgame long", "set": "test"}, {"id": "003S3", "fen": "1r3k1r/pNqnppb1/6pn/2p3Np/7P/2P2Q2/PP3PP1/R1B1K2R w KQ - 3 16", "sol": "g5e6", "rating": 1336, "themes": "advantage middlegame pin short", "set": "test"}, {"id": "01cXb", "fen": "7k/6p1/5r1p/4p3/2pp4/2q2PP1/Q3P1KP/1R6 w - - 2 32", "sol": "a2a8", "rating": 2253, "themes": "crushing endgame pin veryLong", "set": "test"}, {"id": "00SWh", "fen": "rn5Q/pp2np2/1k1B4/6N1/6b1/8/PPP1q3/2KR4 w - - 1 19", "sol": "h8d4", "rating": 2778, "themes": "crushing exposedKing long middlegame", "set": "test"}, {"id": "00Yy4", "fen": "r7/pp4kp/6p1/2P2q1n/1PBb1p2/P4P2/3B2PP/2Q1R2K b - - 2 28", "sol": "h5g3", "rating": 1049, "themes": "clearance kingsideAttack mate mateIn2 middlegame sacrifice short", "set": "test"}, {"id": "00Ocp", "fen": "r3k3/p1pb4/2p2p2/2q1p1p1/2B3p1/2P4r/P1P2PQP/3RR1K1 w q - 4 21", "sol": "g2e4", "rating": 2152, "themes": "crushing exposedKing long middlegame", "set": "test"}, {"id": "006cZ", "fen": "3r1r1k/1p4p1/p1p3Qp/2q5/8/3n1N1P/PP1R2P1/5R1K w - - 8 29", "sol": "d2d3", "rating": 1374, "themes": "advantage master masterVsMaster middlegame short", "set": "test"}, {"id": "00KYE", "fen": "r1b2k1r/pp4p1/2pq2p1/3p4/3Q4/1N6/PPP2PPP/R4RK1 b - - 0 17", "sol": "d6h2", "rating": 894, "themes": "kingsideAttack mate mateIn1 middlegame oneMove", "set": "test"}, {"id": "03ABF", "fen": "5r1k/6p1/6B1/pp1n4/4P3/6B1/P3R1PP/2b3K1 b - - 0 31", "sol": "d5c3", "rating": 2623, "themes": "advantage endgame master quietMove veryLong", "set": "test"}, {"id": "00ofO", "fen": "8/6pp/2p1kp2/P1Bpn3/1P6/7P/r4PP1/4R1K1 w - - 3 32", "sol": "f2f4", "rating": 1487, "themes": "crushing endgame short", "set": "test"}, {"id": "02NAh", "fen": "5Q2/p1p4k/2b4p/4q1pP/2Ppp3/1P4p1/P4PB1/6K1 w - - 0 34", "sol": "g2h3", "rating": 2404, "themes": "crushing defensiveMove endgame master quietMove short", "set": "test"}, {"id": "016vg", "fen": "4r1k1/2R3p1/p3r2p/1p2P3/1q6/1P4P1/P3Q2P/4R1K1 b - - 0 31", "sol": "e6e5", "rating": 2084, "themes": "attraction crushing endgame fork veryLong", "set": "test"}, {"id": "00SUF", "fen": "1n6/1P6/5pp1/2k5/6PP/4P3/3K4/8 w - - 1 52", "sol": "h4h5", "rating": 1343, "themes": "crushing endgame knightEndgame long master", "set": "test"}, {"id": "00Keu", "fen": "R7/1p3kp1/2pK3p/3p1PP1/3r2nP/8/1P6/8 w - - 0 40", "sol": "g5g6", "rating": 882, "themes": "endgame mate mateIn2 short", "set": "test"}, {"id": "00xWV", "fen": "6k1/4b3/p4pPq/1p2p2P/2p3Q1/P7/1PP5/1K6 w - - 1 39", "sol": "g4e6", "rating": 1560, "themes": "crushing endgame fork master short", "set": "test"}, {"id": "00huB", "fen": "3r2k1/ppp1bppp/2n5/8/4P1b1/1P3N1P/PBP1P1P1/2K2B1R b - - 0 16", "sol": "g4f3", "rating": 1394, "themes": "crushing long middlegame", "set": "test"}, {"id": "00YhS", "fen": "7K/8/8/5p2/4kP2/6P1/8/8 b - - 0 62", "sol": "e4f3", "rating": 979, "themes": "crushing endgame long pawnEndgame", "set": "test"}, {"id": "02cCF", "fen": "8/5pk1/1PK5/R5pp/8/8/8/2r5 w - - 2 41", "sol": "a5c5", "rating": 2523, "themes": "advancedPawn clearance crushing defensiveMove endgame master rookEndgame veryLong", "set": "test"}, {"id": "03ASa", "fen": "8/6p1/pp5p/2p5/P1P1K1Pk/1P5P/8/8 b - - 0 49", "sol": "a6a5", "rating": 2663, "themes": "crushing defensiveMove endgame pawnEndgame quietMove veryLong", "set": "test"}, {"id": "00vf5", "fen": "r1b1kb1r/1pqpnppp/p1n1p3/8/2BNP3/P1N5/1PP2PPP/R1BQK2R w KQkq - 1 8", "sol": "d4b5", "rating": 2162, "themes": "crushing long opening sacrifice", "set": "test"}, {"id": "00e63", "fen": "r4r1k/pp4pp/2pp1b2/4p3/N2qP3/3Q4/PPP2PPP/3RR1K1 w - - 4 17", "sol": "d3b3", "rating": 1755, "themes": "advantage discoveredAttack middlegame short trappedPiece", "set": "test"}, {"id": "00DkJ", "fen": "3r1bnr/2p2ppp/2bk4/R7/5P2/2N5/4N1PP/1R4K1 w - - 4 22", "sol": "b1d1", "rating": 1575, "themes": "crushing deflection exposedKing long middlegame", "set": "test"}, {"id": "00ON5", "fen": "8/k1p5/P7/3N4/3P2pp/4K1n1/6P1/8 b - - 2 47", "sol": "h4h3", "rating": 1825, "themes": "advancedPawn crushing endgame knightEndgame long promotion", "set": "test"}, {"id": "00DZe", "fen": "8/5k2/7p/p1P1bPpP/Pp2P3/1P1p1K2/5B2/8 b - - 2 47", "sol": "g5g4", "rating": 2318, "themes": "bishopEndgame crushing deflection endgame long master skewer", "set": "test"}, {"id": "00Mke", "fen": "6k1/p2P1p2/8/6pp/P2Q4/5qPP/r4P1K/3R4 b - - 0 42", "sol": "a2f2", "rating": 1160, "themes": "crushing endgame long", "set": "test"}, {"id": "01DLY", "fen": "5rn1/1p3r1k/p5pp/4Q3/3P4/1N5P/PP4PK/R1B2q2 w - - 1 25", "sol": "c1h6", "rating": 1775, "themes": "crushing middlegame short", "set": "test"}, {"id": "00nji", "fen": "3R4/5ppk/2b4p/2b5/p1P5/P4P1P/6P1/5K2 w - - 5 37", "sol": "d8c8", "rating": 1142, "themes": "advantage endgame short", "set": "test"}, {"id": "00m6L", "fen": "8/8/k6p/p4p1P/K1p1pP2/2P1P3/1P6/8 b - - 0 49", "sol": "a6b6", "rating": 1370, "themes": "crushing defensiveMove endgame long pawnEndgame zugzwang", "set": "test"}, {"id": "00O9q", "fen": "5r2/5p2/4nP1k/4N1p1/8/6P1/6K1/R7 w - - 2 79", "sol": "a1h1", "rating": 1291, "themes": "endgame master mate mateIn1 oneMove", "set": "test"}, {"id": "01E12", "fen": "2k5/1pp1r2Q/pr2p3/3p1p2/q2b4/P2NP3/1PP3PP/K3RR2 w - - 0 26", "sol": "h7e7", "rating": 2093, "themes": "crushing hangingPiece middlegame short", "set": "test"}, {"id": "00qFT", "fen": "8/8/7p/3Bk1p1/P3p3/7P/8/6K1 b - - 0 41", "sol": "e5d5", "rating": 2669, "themes": "crushing endgame quietMove veryLong", "set": "test"}, {"id": "00bJi", "fen": "7k/1p2R3/p3N3/3p4/2n5/2PK4/PP5r/8 b - - 4 36", "sol": "h2d2", "rating": 1458, "themes": "endgame hookMate mate mateIn1 oneMove", "set": "test"}, {"id": "02vhe", "fen": "8/8/p7/1ppp2k1/4p1P1/P2P3K/1PP4P/8 b - - 0 41", "sol": "e4d3", "rating": 2781, "themes": "crushing defensiveMove endgame pawnEndgame veryLong", "set": "test"}, {"id": "00qD8", "fen": "8/1Q3R1p/p5pk/1p2q3/2p5/P6P/1b2r1P1/7K w - - 1 38", "sol": "f7h7", "rating": 1890, "themes": "advantage endgame long", "set": "test"}, {"id": "00Yqb", "fen": "8/6k1/4p1pq/1p1pPp2/p2P1n2/2P1QNP1/PP3P1P/5K2 b - - 0 39", "sol": "h6h3", "rating": 1161, "themes": "crushing endgame fork long", "set": "test"}, {"id": "00Vt0", "fen": "1k4r1/pp3p2/4p3/2N1q3/1P1bp3/P3P3/5P2/2RR1K2 w - - 2 28", "sol": "c5d7", "rating": 885, "themes": "advantage endgame fork short", "set": "test"}, {"id": "03mcu", "fen": "r7/P4R2/3p4/8/2P5/5p2/P3k3/6K1 b - - 1 61", "sol": "a8a7", "rating": 2439, "themes": "advancedPawn crushing deflection endgame exposedKing long master promotion rookEndgame sacrifice", "set": "test"}, {"id": "00DII", "fen": "2rr2k1/p5p1/1p5p/2pq1p1P/8/P4QR1/5PP1/4R1K1 w - - 0 32", "sol": "e1e8", "rating": 1790, "themes": "advantage endgame intermezzo long", "set": "test"}, {"id": "00j9Q", "fen": "rnb2r1k/2q2p1p/p2p1b2/1p2pp2/4P1QN/3B3R/PPP2PPP/R5K1 w - - 0 20", "sol": "h4f5", "rating": 2022, "themes": "advantage middlegame short", "set": "test"}, {"id": "00hNb", "fen": "5k2/pp3ppp/4p3/3p4/1Pn2q2/2P3P1/P3QnKP/R2R4 b - - 2 30", "sol": "c4e3", "rating": 1091, "themes": "crushing endgame fork short", "set": "test"}, {"id": "009BH", "fen": "3r3k/6p1/4Q3/4B3/1p3P2/4PKP1/3q4/8 w - - 18 52", "sol": "e6h6", "rating": 1513, "themes": "endgame mate mateIn2 pin short", "set": "test"}, {"id": "01JJc", "fen": "4k3/4P3/2p1KP1r/2N5/8/8/p7/8 w - - 5 43", "sol": "c5e4", "rating": 2120, "themes": "endgame mate mateIn2 quietMove short", "set": "test"}, {"id": "004Ys", "fen": "r4rk1/5pbp/p1n1p1p1/2p3NP/1p1q1B2/3P3Q/PPP3P1/R3R1K1 w - - 3 20", "sol": "f4e3", "rating": 2417, "themes": "advantage defensiveMove middlegame veryLong", "set": "test"}, {"id": "021Bw", "fen": "3rr1k1/1Bpq1p1p/p2b2p1/5b2/3B4/2P3P1/PP1Q1P1P/3RR1K1 b - - 0 20", "sol": "c7c5", "rating": 2410, "themes": "advantage discoveredAttack long middlegame", "set": "test"}, {"id": "00AOH", "fen": "6k1/8/1R2p1pp/4P3/p1N2P2/6PK/7P/1r6 b - - 0 48", "sol": "b1b6", "rating": 866, "themes": "advancedPawn advantage endgame long", "set": "test"}, {"id": "00Elq", "fen": "rn3q1r/4pk2/2pp1npp/p5Q1/1p1PPNP1/5P2/PPP5/R4KNR w - - 0 18", "sol": "g5g6", "rating": 832, "themes": "mate mateIn1 middlegame oneMove", "set": "test"}, {"id": "00tbH", "fen": "8/1q1r1k1p/p1p1p1p1/2p2pRn/Q1P2P1P/3PPP2/P2rK3/6R1 w - - 0 27", "sol": "e2d2", "rating": 1264, "themes": "advantage hangingPiece middlegame short", "set": "test"}, {"id": "00FON", "fen": "1k6/8/8/6p1/1pp4P/p4PP1/N1P5/7K b - - 0 38", "sol": "b4b3", "rating": 956, "themes": "crushing endgame knightEndgame short", "set": "test"}, {"id": "01WXF", "fen": "r1b2rk1/p4qbp/1pR2pp1/8/2pBPP2/1P3Q1P/P1B3P1/5RK1 b - - 1 23", "sol": "f7d7", "rating": 2674, "themes": "advantage fork long middlegame", "set": "test"}, {"id": "010Sa", "fen": "3r2k1/pb2q1r1/4p3/2p2p1Q/3p4/3R3R/PPP2P1P/5K2 w - - 2 27", "sol": "d3g3", "rating": 2672, "themes": "advantage attraction exposedKing middlegame skewer veryLong", "set": "test"}, {"id": "00ao5", "fen": "r3B2k/pp4pp/2n5/q1p3b1/2Q5/8/PPP2PbP/R4RK1 w - - 0 18", "sol": "c4f7", "rating": 2076, "themes": "advantage long middlegame", "set": "test"}, {"id": "00rEz", "fen": "r1bqk2r/ppp2ppp/3p4/4p3/2PBP2b/5Pn1/PP4PP/RN1QKB1R w KQkq - 0 10", "sol": "h2g3", "rating": 1507, "themes": "advantage long opening", "set": "test"}, {"id": "006RM", "fen": "1k1r3r/8/pp1n2p1/2q5/1Q6/3R2P1/PPP2P1P/3R2K1 w - - 5 30", "sol": "b4c5", "rating": 1445, "themes": "crushing long middlegame", "set": "test"}, {"id": "00XbN", "fen": "6k1/R4p1p/6P1/3p4/8/2b5/1r3rPP/5RK1 w - - 0 27", "sol": "g6f7", "rating": 2109, "themes": "advancedPawn advantage endgame short", "set": "test"}, {"id": "00XGg", "fen": "2k4r/ppp2ppr/2n5/3b1N2/3p1bP1/5NP1/PPP1QPK1/R3R3 b - - 2 20", "sol": "h7h2", "rating": 1804, "themes": "attraction mate mateIn4 middlegame operaMate pin sacrifice veryLong", "set": "test"}, {"id": "02cVu", "fen": "2rr2k1/1b5p/pq2pp1b/3nQ3/2B5/1P6/PB4PP/R4R1K w - - 0 23", "sol": "f1f6", "rating": 2507, "themes": "advantage long middlegame", "set": "test"}, {"id": "00eak", "fen": "4r1k1/5pp1/5n1p/P5r1/7q/1QP1p1PP/1P3P1K/R3RB2 b - - 1 27", "sol": "f6g4", "rating": 1937, "themes": "crushing middlegame pin short", "set": "test"}, {"id": "00lJm", "fen": "7k/ppp1nrp1/3pN3/7p/3P3P/2P2RK1/PP3QP1/1q5r w - - 0 27", "sol": "f3f7", "rating": 2032, "themes": "advantage hangingPiece middlegame short", "set": "test"}, {"id": "00NEO", "fen": "4qr2/pR4pk/2b2p1p/4pPP1/3bB3/3P3Q/P1r4P/4BR1K w - - 1 25", "sol": "h3h6", "rating": 1863, "themes": "mate mateIn2 middlegame pin short", "set": "test"}, {"id": "00nFD", "fen": "r4rk1/p1q2pb1/2p1b1pp/3np3/2B1N1PP/4BP2/PPP5/2KRQ2R b - - 0 16", "sol": "d5e3", "rating": 1303, "themes": "advantage master middlegame short", "set": "test"}, {"id": "02pFU", "fen": "r1k5/2p2Q2/1b3P2/1p2p1p1/8/2P4p/1PB1RPq1/4K3 w - - 1 33", "sol": "c2e4", "rating": 2829, "themes": "crushing endgame fork veryLong", "set": "test"}, {"id": "001pC", "fen": "r4rk1/pp3ppp/3b4/2p1pPB1/7N/2PP3n/PP4PP/R2Q2RK b - - 0 18", "sol": "h3f2", "rating": 848, "themes": "mate mateIn1 middlegame oneMove smotheredMate", "set": "test"}, {"id": "02eVV", "fen": "4r3/Q6p/6pk/3n1q2/4N3/2P2rPP/PP2R2K/4R3 b - - 2 30", "sol": "d5f4", "rating": 2555, "themes": "crushing long middlegame", "set": "test"}, {"id": "017u3", "fen": "r2q1rk1/4bppp/p3bn2/1p2N3/5B2/2N5/PP3PPP/R2QR1K1 w - - 2 20", "sol": "e5c6", "rating": 1919, "themes": "advantage kingsideAttack opening skewer veryLong", "set": "test"}, {"id": "00AbP", "fen": "6k1/pp3pp1/2p5/7b/4r2P/2P2N2/PP4K1/3R4 w - - 0 25", "sol": "d1d8", "rating": 804, "themes": "crushing endgame short", "set": "test"}, {"id": "0116f", "fen": "r3k1r1/2pq1p2/p2p1R2/4p1np/P1B1P1bP/2NPP3/2P3P1/R3Q1K1 b q - 0 19", "sol": "g5f3", "rating": 1927, "themes": "advantage kingsideAttack middlegame short", "set": "test"}, {"id": "00m47", "fen": "rn1r2k1/pp2qppp/2b1pn2/6B1/2B4N/8/PPP1QPPP/2KR3R w - - 8 16", "sol": "h4f5", "rating": 1913, "themes": "crushing middlegame short", "set": "test"}, {"id": "01FId", "fen": "2r5/1Q3p1k/6pp/p4q2/8/2P1R1R1/P2r1PK1/8 w - - 6 39", "sol": "e3f3", "rating": 1902, "themes": "crushing endgame short", "set": "test"}, {"id": "04Lge", "fen": "8/4b1pk/2R1P1qp/3p4/3P4/5P1P/4QP1K/1rN5 b - - 6 43", "sol": "e7d6", "rating": 2716, "themes": "crushing endgame veryLong", "set": "test"}, {"id": "01PlY", "fen": "r5k1/p4p1p/1p1R2n1/4p1Q1/1P2qn2/P7/1B3PP1/R5K1 b - - 1 24", "sol": "h7h6", "rating": 2110, "themes": "crushing long middlegame", "set": "test"}, {"id": "00v6q", "fen": "2Qqk3/5pp1/2pr4/2Np4/3P4/7P/P1P3P1/6K1 w - - 5 35", "sol": "c5b7", "rating": 1940, "themes": "crushing endgame fork long master sacrifice", "set": "test"}];
+
+/* --- MD5 (RFC 1321), для сплита train/test при загрузке своего CSV --- */
+function md5(input) {
+  function rl(n, c) { return (n << c) | (n >>> (32 - c)); }
+  function add(x, y) {
+    var l = (x & 0xffff) + (y & 0xffff), m = (x >> 16) + (y >> 16) + (l >> 16);
+    return (m << 16) | (l & 0xffff);
+  }
+  function f(q, a, b, c, x, s, t) { return add(rl(add(add(a, q), add(x, t)), s), b); }
+  function ff(a, b, c, d, x, s, t) { return f((b & c) | (~b & d), a, b, c, x, s, t); }
+  function gg(a, b, c, d, x, s, t) { return f((b & d) | (c & ~d), a, b, c, x, s, t); }
+  function hh(a, b, c, d, x, s, t) { return f(b ^ c ^ d, a, b, c, x, s, t); }
+  function ii(a, b, c, d, x, s, t) { return f(c ^ (b | ~d), a, b, c, x, s, t); }
+  var txt = unescape(encodeURIComponent(input));
+  var len = txt.length;
+  var words = [];
+  for (var i = 0; i < len; i++) words[i >> 2] |= txt.charCodeAt(i) << ((i % 4) << 3);
+  words[len >> 2] |= 0x80 << ((len % 4) << 3);
+  words[(((len + 8) >> 6) << 4) + 14] = len * 8;
+  var a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+  for (var j = 0; j < words.length; j += 16) {
+    var aa = a, bb = b, cc = c, dd = d;
+    a = ff(a, b, c, d, words[j+0], 7, -680876936); d = ff(d, a, b, c, words[j+1], 12, -389564586);
+    c = ff(c, d, a, b, words[j+2], 17, 606105819); b = ff(b, c, d, a, words[j+3], 22, -1044525330);
+    a = ff(a, b, c, d, words[j+4], 7, -176418897); d = ff(d, a, b, c, words[j+5], 12, 1200080426);
+    c = ff(c, d, a, b, words[j+6], 17, -1473231341); b = ff(b, c, d, a, words[j+7], 22, -45705983);
+    a = ff(a, b, c, d, words[j+8], 7, 1770035416); d = ff(d, a, b, c, words[j+9], 12, -1958414417);
+    c = ff(c, d, a, b, words[j+10], 17, -42063); b = ff(b, c, d, a, words[j+11], 22, -1990404162);
+    a = ff(a, b, c, d, words[j+12], 7, 1804603682); d = ff(d, a, b, c, words[j+13], 12, -40341101);
+    c = ff(c, d, a, b, words[j+14], 17, -1502002290); b = ff(b, c, d, a, words[j+15], 22, 1236535329);
+    a = gg(a, b, c, d, words[j+1], 5, -165796510); d = gg(d, a, b, c, words[j+6], 9, -1069501632);
+    c = gg(c, d, a, b, words[j+11], 14, 643717713); b = gg(b, c, d, a, words[j+0], 20, -373897302);
+    a = gg(a, b, c, d, words[j+5], 5, -701558691); d = gg(d, a, b, c, words[j+10], 9, 38016083);
+    c = gg(c, d, a, b, words[j+15], 14, -660478335); b = gg(b, c, d, a, words[j+4], 20, -405537848);
+    a = gg(a, b, c, d, words[j+9], 5, 568446438); d = gg(d, a, b, c, words[j+14], 9, -1019803690);
+    c = gg(c, d, a, b, words[j+3], 14, -187363961); b = gg(b, c, d, a, words[j+8], 20, 1163531501);
+    a = gg(a, b, c, d, words[j+13], 5, -1444681467); d = gg(d, a, b, c, words[j+2], 9, -51403784);
+    c = gg(c, d, a, b, words[j+7], 14, 1735328473); b = gg(b, c, d, a, words[j+12], 20, -1926607734);
+    a = hh(a, b, c, d, words[j+5], 4, -378558); d = hh(d, a, b, c, words[j+8], 11, -2022574463);
+    c = hh(c, d, a, b, words[j+11], 16, 1839030562); b = hh(b, c, d, a, words[j+14], 23, -35309556);
+    a = hh(a, b, c, d, words[j+1], 4, -1530992060); d = hh(d, a, b, c, words[j+4], 11, 1272893353);
+    c = hh(c, d, a, b, words[j+7], 16, -155497632); b = hh(b, c, d, a, words[j+10], 23, -1094730640);
+    a = hh(a, b, c, d, words[j+13], 4, 681279174); d = hh(d, a, b, c, words[j+0], 11, -358537222);
+    c = hh(c, d, a, b, words[j+3], 16, -722521979); b = hh(b, c, d, a, words[j+6], 23, 76029189);
+    a = hh(a, b, c, d, words[j+9], 4, -640364487); d = hh(d, a, b, c, words[j+12], 11, -421815835);
+    c = hh(c, d, a, b, words[j+15], 16, 530742520); b = hh(b, c, d, a, words[j+2], 23, -995338651);
+    a = ii(a, b, c, d, words[j+0], 6, -198630844); d = ii(d, a, b, c, words[j+7], 10, 1126891415);
+    c = ii(c, d, a, b, words[j+14], 15, -1416354905); b = ii(b, c, d, a, words[j+5], 21, -57434055);
+    a = ii(a, b, c, d, words[j+12], 6, 1700485571); d = ii(d, a, b, c, words[j+3], 10, -1894986606);
+    c = ii(c, d, a, b, words[j+10], 15, -1051523); b = ii(b, c, d, a, words[j+1], 21, -2054922799);
+    a = ii(a, b, c, d, words[j+8], 6, 1873313359); d = ii(d, a, b, c, words[j+15], 10, -30611744);
+    c = ii(c, d, a, b, words[j+6], 15, -1560198380); b = ii(b, c, d, a, words[j+13], 21, 1309151649);
+    a = ii(a, b, c, d, words[j+4], 6, -145523070); d = ii(d, a, b, c, words[j+11], 10, -1120210379);
+    c = ii(c, d, a, b, words[j+2], 15, 718787259); b = ii(b, c, d, a, words[j+9], 21, -343485551);
+    a = add(a, aa); b = add(b, bb); c = add(c, cc); d = add(d, dd);
+  }
+  var out = "";
+  [a, b, c, d].forEach(function (n) {
+    for (var k = 0; k < 4; k++) {
+      var byte = (n >> (k * 8)) & 0xff;
+      out += ((byte >> 4) & 0x0f).toString(16) + (byte & 0x0f).toString(16);
+    }
+  });
+  return out;
+}
+function hashSet(id) {
+  // Точный md5 mod 1000 как в Python (int(hex, 16) % 1000): остаток считаем по цифрам,
+  // parseInt от 128-битного hex терял точность и давал другой сплит на ~48% id.
+  var h = md5(id), r = 0;
+  for (var i = 0; i < h.length; i++) r = (r * 16 + parseInt(h.charAt(i), 16)) % 1000;
+  return r / 1000 < 0.5 ? "train" : "test";
+}
+
+/* --- Шахматы: FEN + легальные ходы (своя реализация) --- */
+var FILES = "abcdefgh";
+function sqName(i) { return FILES[i % 8] + (8 - Math.floor(i / 8)); }
+function sqIndex(name) { return (8 - parseInt(name[1])) * 8 + FILES.indexOf(name[0]); }
+function idx(f, r) { return (7 - r) * 8 + f; }
+function fileOf(i) { return i % 8; }
+function rankOf(i) { return 7 - Math.floor(i / 8); }
+function inBoard(f, r) { return f >= 0 && f < 8 && r >= 0 && r < 8; }
+function opp(c) { return c === "w" ? "b" : "w"; }
+function parseFEN(fen) {
+  var parts = fen.trim().split(/\s+/);
+  var rows = parts[0].split("/");
+  var board = new Array(64).fill(null);
+  for (var r = 0; r < 8; r++) {
+    var f = 0;
+    for (var ch of rows[r]) {
+      if (/\d/.test(ch)) { f += parseInt(ch); }
+      else { board[r * 8 + f] = { t: ch.toLowerCase(), c: (ch === ch.toUpperCase() ? "w" : "b") }; f++; }
+    }
+  }
+  return { board: board, turn: parts[1] || "w", castling: parts[2] || "-", ep: (parts[3] && parts[3] !== "-") ? sqIndex(parts[3]) : -1 };
+}
+var KNIGHT_OFF = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]];
+var KING_OFF = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+var SLIDE = { b: [[1,1],[1,-1],[-1,1],[-1,-1]], r: [[1,0],[-1,0],[0,1],[0,-1]], q: [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]] };
+var CASTLE = {
+  w: { K: { kingTo: 62, empty: [61, 62], transit: [61, 62], rookFrom: 63, rookTo: 61 },
+       Q: { kingTo: 58, empty: [59, 58, 57], transit: [59, 58], rookFrom: 56, rookTo: 59 } },
+  b: { K: { kingTo: 6, empty: [5, 6], transit: [5, 6], rookFrom: 7, rookTo: 5 },
+       Q: { kingTo: 2, empty: [3, 2, 1], transit: [3, 2], rookFrom: 0, rookTo: 3 } }
+};
+function isAttacked(st, sq, byColor) {
+  var f = fileOf(sq), r = rankOf(sq);
+  var pawnDir = (byColor === "w") ? -1 : 1;
+  for (var df of [-1, 1]) {
+    var pf = f + df, pr = r + pawnDir;
+    if (inBoard(pf, pr)) { var p = st.board[idx(pf, pr)]; if (p && p.t === "p" && p.c === byColor) return true; }
+  }
+  for (var o of KNIGHT_OFF) {
+    var nf = f + o[0], nr = r + o[1];
+    if (inBoard(nf, nr)) { var p = st.board[idx(nf, nr)]; if (p && p.t === "n" && p.c === byColor) return true; }
+  }
+  for (var o of KING_OFF) {
+    var nf = f + o[0], nr = r + o[1];
+    if (inBoard(nf, nr)) { var p = st.board[idx(nf, nr)]; if (p && p.t === "k" && p.c === byColor) return true; }
+  }
+  for (var d of SLIDE.q) {
+    var nf = f + d[0], nr = r + d[1];
+    while (inBoard(nf, nr)) {
+      var p = st.board[idx(nf, nr)];
+      if (p) {
+        if (p.c === byColor) {
+          var isDiag = d[0] !== 0 && d[1] !== 0;
+          if (p.t === "q" || (isDiag && p.t === "b") || (!isDiag && p.t === "r")) return true;
+        }
+        break;
+      }
+      nf += d[0]; nr += d[1];
+    }
+  }
+  return false;
+}
+function addPawnMove(moves, i, to, promo) {
+  if (promo) { for (var pr of ["q", "r", "b", "n"]) moves.push({ from: i, to: to, piece: "p", promotion: pr }); }
+  else moves.push({ from: i, to: to, piece: "p" });
+}
+function genPseudo(st, color) {
+  var moves = [];
+  var dir = (color === "w") ? 1 : -1;
+  var startRank = (color === "w") ? 1 : 6;
+  var promoRank = (color === "w") ? 7 : 0;
+  for (var i = 0; i < 64; i++) {
+    var p = st.board[i];
+    if (!p || p.c !== color) continue;
+    var f = fileOf(i), r = rankOf(i);
+    if (p.t === "p") {
+      var r1 = r + dir;
+      if (inBoard(f, r1) && !st.board[idx(f, r1)]) {
+        addPawnMove(moves, i, idx(f, r1), r1 === promoRank);
+        var r2 = r + 2 * dir;
+        if (r === startRank && !st.board[idx(f, r2)]) moves.push({ from: i, to: idx(f, r2), piece: "p", double: true });
+      }
+      for (var df of [-1, 1]) {
+        var nf = f + df, nr = r + dir;
+        if (!inBoard(nf, nr)) continue;
+        var t = idx(nf, nr);
+        var target = st.board[t];
+        if (target && target.c !== color) addPawnMove(moves, i, t, nr === promoRank);
+        else if (!target && t === st.ep) moves.push({ from: i, to: t, piece: "p", ep: true });
+      }
+    } else if (p.t === "n" || p.t === "k") {
+      var offs = (p.t === "n") ? KNIGHT_OFF : KING_OFF;
+      for (var o of offs) {
+        var nf = f + o[0], nr = r + o[1];
+        if (!inBoard(nf, nr)) continue;
+        var t = idx(nf, nr);
+        var target = st.board[t];
+        if (!target || target.c !== color) moves.push({ from: i, to: t, piece: p.t });
+      }
+      if (p.t === "k") {
+        var home = (color === "w") ? 60 : 4;
+        if (i === home) {
+          var ks = (color === "w") ? "K" : "k", qs = (color === "w") ? "Q" : "q";
+          var ocol = opp(color);
+          for (var side of [ks, qs]) {
+            if (!st.castling.includes(side)) continue;
+            var c = CASTLE[color][side.toUpperCase()];
+            var rook = st.board[c.rookFrom];
+            if (!rook || rook.t !== "r" || rook.c !== color) continue;
+            if (!c.empty.every(function (s) { return !st.board[s]; })) continue;
+            if (isAttacked(st, home, ocol)) continue;
+            if (c.transit.some(function (s) { return isAttacked(st, s, ocol); })) continue;
+            moves.push({ from: i, to: c.kingTo, piece: "k", castle: side });
+          }
+        }
+      }
+    } else {
+      for (var d of SLIDE[p.t]) {
+        var nf = f + d[0], nr = r + d[1];
+        while (inBoard(nf, nr)) {
+          var t = idx(nf, nr);
+          var target = st.board[t];
+          if (!target) moves.push({ from: i, to: t, piece: p.t });
+          else { if (target.c !== color) moves.push({ from: i, to: t, piece: p.t }); break; }
+          nf += d[0]; nr += d[1];
+        }
+      }
+    }
+  }
+  return moves;
+}
+function findKing(st, color) {
+  for (var i = 0; i < 64; i++) { var p = st.board[i]; if (p && p.t === "k" && p.c === color) return i; }
+  return -1;
+}
+function makeMove(st, m) {
+  var nb = st.board.slice();
+  var piece = nb[m.from];
+  nb[m.from] = null;
+  if (m.ep) nb[idx(fileOf(m.to), rankOf(m.from))] = null;
+  if (m.castle) { var c = CASTLE[piece.c][m.castle.toUpperCase()]; nb[c.rookTo] = nb[c.rookFrom]; nb[c.rookFrom] = null; }
+  nb[m.to] = { t: m.promotion || piece.t, c: piece.c };
+  var castling = st.castling;
+  if (piece.t === "k") castling = castling.replace(piece.c === "w" ? /[KQ]/g : /[kq]/g, "");
+  if (piece.t === "r") {
+    if (m.from === 63) castling = castling.replace("K", "");
+    if (m.from === 56) castling = castling.replace("Q", "");
+    if (m.from === 7) castling = castling.replace("k", "");
+    if (m.from === 0) castling = castling.replace("q", "");
+  }
+  var captured = st.board[m.to];
+  if (captured && captured.t === "r") {
+    if (m.to === 63) castling = castling.replace("K", "");
+    if (m.to === 56) castling = castling.replace("Q", "");
+    if (m.to === 7) castling = castling.replace("k", "");
+    if (m.to === 0) castling = castling.replace("q", "");
+  }
+  if (!castling) castling = "-";
+  var ep = -1;
+  if (m.double) ep = idx(fileOf(m.from), rankOf(m.from) + (piece.c === "w" ? 1 : -1));
+  return { board: nb, turn: opp(st.turn), castling: castling, ep: ep };
+}
+function genLegal(st, color) {
+  var out = [];
+  for (var m of genPseudo(st, color)) {
+    var st2 = makeMove(st, m);
+    var ksq = findKing(st2, color);
+    if (ksq === -1 || !isAttacked(st2, ksq, opp(color))) out.push(m);
+  }
+  return out;
+}
+function moveUCI(m) { return sqName(m.from) + sqName(m.to) + (m.promotion || ""); }
+
+/* --- Калибровка и таблица тем: порт common/stats.py (паритет проверяет test_web.js) --- */
+var Z95 = 1.959963984540054, Z_POWER80 = 0.8416212335729143;
+var MIN_N_CALIBRATION = 30, MIN_N_THEME = 20, Z_CRIT_THEME = 3.0, MIN_GAP_THEME = 0.05;
+var SERVICE_TAGS = { advantage: 1, crushing: 1, equality: 1, opening: 1, middlegame: 1, endgame: 1,
+  oneMove: 1, short: 1, long: 1, veryLong: 1, mate: 1, master: 1, masterVsMaster: 1, superGM: 1 };
+var LENGTH_CLASS = { oneMove: 1, short: 2, long: 3, veryLong: 4 };
+function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+function clamp(x, lo, hi) { return Math.min(Math.max(x, lo), hi); }
+function tagsOf(themes) { return String(themes || "").split(/\s+/).filter(Boolean); }
+function lengthClass(themes) {
+  var t = tagsOf(themes);
+  for (var i = 0; i < t.length; i++) if (has(LENGTH_CLASS, t[i])) return LENGTH_CLASS[t[i]];
+  return 0;
+}
+function expectedP(userRating, itemRating) {
+  return 1 / (1 + Math.pow(10, -(userRating - itemRating) / 400));
+}
+function isHint(r) {
+  var v = String(r.hints == null || r.hints === "" ? "0" : r.hints).trim().toLowerCase();
+  return !(v === "0" || v === "0.0" || v === "false" || v === "");
+}
+function withoutHints(rows) { return rows.filter(function (r) { return !isHint(r); }); }
+function hitOf(r) { return Math.trunc(Number(r.correct)) ? 1 : 0; }
+function confOf(r) { return clamp(Number(r.confidence) / 100, 0.01, 0.99); }
+function expOf(r) { return clamp(Number(r.expected), 0.01, 0.99); }
+function wilson(k, n, z) {
+  z = z === undefined ? Z95 : z;
+  if (n <= 0) return [0, 1];
+  var p = k / n, z2 = z * z, denom = 1 + z2 / n;
+  var centre = (p + z2 / (2 * n)) / denom;
+  var half = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denom;
+  return [Math.max(0, centre - half), Math.min(1, centre + half)];
+}
+function calibrationSummary(rows) {
+  var n = rows.length;
+  var out = { n: n, acc: null, acc_lo: null, acc_hi: null, mean_conf: null, bias: null, bias_z: null,
+    log_loss: null, log_loss_base: null, skill: null, brier: null, verdict: "нет данных" };
+  if (!n) return out;
+  var k = 0, sp = 0, ll = 0, brier = 0, variance = 0, i, y, p;
+  for (i = 0; i < n; i++) {
+    y = hitOf(rows[i]); p = confOf(rows[i]);
+    k += y; sp += p;
+    ll += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+    brier += (p - y) * (p - y);
+    variance += p * (1 - p);
+  }
+  var acc = k / n, w = wilson(k, n);
+  var pb = clamp(acc, 0.01, 0.99), llBase = 0;
+  for (i = 0; i < n; i++) { y = hitOf(rows[i]); llBase += -(y * Math.log(pb) + (1 - y) * Math.log(1 - pb)); }
+  ll /= n; llBase /= n; brier /= n;
+  var meanConf = sp / n, z = (sp - k) / Math.sqrt(variance), bias = meanConf - acc, verdict;
+  if (n < MIN_N_CALIBRATION) verdict = "мало данных";
+  else if (z >= 2 && bias >= 0.05) verdict = "самоуверенность";
+  else if (z <= -2 && bias <= -0.05) verdict = "недоуверенность";
+  else verdict = "в пределах шума";
+  out.acc = acc; out.acc_lo = w[0]; out.acc_hi = w[1]; out.mean_conf = meanConf; out.bias = bias;
+  out.bias_z = z; out.log_loss = ll; out.log_loss_base = llBase; out.skill = 1 - ll / llBase;
+  out.brier = brier; out.verdict = verdict;
+  return out;
+}
+function reliability(rows, edges) {
+  edges = edges || [0, 20, 40, 60, 80, 100];
+  var k = edges.length - 1, bins = [], i, j;
+  for (i = 0; i < k; i++) bins.push([]);
+  rows.forEach(function (r) {
+    var c = Number(r.confidence), b = k - 1;
+    for (j = 0; j < k; j++) if (c < edges[j + 1]) { b = j; break; }
+    bins[b].push(r);
+  });
+  var out = [];
+  bins.forEach(function (sub, idx) {
+    if (!sub.length) return;
+    var n = sub.length, kk = 0, sc = 0;
+    sub.forEach(function (r) { kk += hitOf(r); sc += Number(r.confidence); });
+    var w = wilson(kk, n);
+    out.push({ lo: edges[idx], hi: edges[idx + 1], n: n, mean_conf: sc / n / 100, acc: kk / n,
+      acc_lo: w[0], acc_hi: w[1] });
+  });
+  return out;
+}
+function dlTau2(gaps, variances) {
+  var k = gaps.length, i;
+  if (!k) return [0, 0];
+  var w = variances.map(function (v) { return 1 / Math.max(v, 1e-12); });
+  var sw = 0, sg = 0;
+  for (i = 0; i < k; i++) { sw += w[i]; sg += w[i] * gaps[i]; }
+  var grand = sg / sw;
+  if (k < 2) return [0, grand];
+  var q = 0, sw2 = 0;
+  for (i = 0; i < k; i++) { q += w[i] * (gaps[i] - grand) * (gaps[i] - grand); sw2 += w[i] * w[i]; }
+  var c = sw - sw2 / sw;
+  return [c > 0 ? Math.max(0, (q - (k - 1)) / c) : 0, grand];
+}
+function residuals(rows, center) {
+  var res = [], vr = [], i;
+  for (i = 0; i < rows.length; i++) {
+    var e = expOf(rows[i]);
+    res.push(hitOf(rows[i]) - e); vr.push(e * (1 - e));
+  }
+  if (center && res.length) {
+    var tot = 0;
+    for (i = 0; i < res.length; i++) tot += res[i];
+    var allmean = tot / res.length, groups = {};
+    for (i = 0; i < rows.length; i++) {
+      var lc = lengthClass(rows[i].themes);
+      (groups[lc] = groups[lc] || []).push(res[i]);
+    }
+    var means = {};
+    Object.keys(groups).forEach(function (g) {
+      var v = groups[g], s = 0;
+      for (var j = 0; j < v.length; j++) s += v[j];
+      means[g] = v.length >= 10 ? s / v.length : allmean;
+    });
+    for (i = 0; i < rows.length; i++) res[i] = res[i] - means[lengthClass(rows[i].themes)];
+  }
+  return [res, vr];
+}
+function themeTable(rows, minN, zCrit, minGap, center) {
+  minN = minN === undefined ? MIN_N_THEME : minN;
+  zCrit = zCrit === undefined ? Z_CRIT_THEME : zCrit;
+  minGap = minGap === undefined ? MIN_GAP_THEME : minGap;
+  center = center === undefined ? true : center;
+  var rv = residuals(rows, center), res = rv[0], vr = rv[1], acc = {}, order = [], i;
+  for (i = 0; i < rows.length; i++) {
+    var e = expOf(rows[i]), tags = tagsOf(rows[i].themes);
+    for (var j = 0; j < tags.length; j++) {
+      var t = tags[j];
+      if (has(SERVICE_TAGS, t)) continue;
+      if (!has(acc, t)) { acc[t] = [0, 0, 0, 0, 0]; order.push(t); }
+      var s = acc[t];
+      s[0] += 1; s[1] += hitOf(rows[i]); s[2] += e; s[3] += res[i]; s[4] += vr[i];
+    }
+  }
+  var out = [];
+  order.forEach(function (t) {
+    var s = acc[t], n = s[0];
+    if (n < 3) return;
+    var sd = Math.sqrt(s[4]), gap = s[3] / n, se = sd / n;
+    out.push({ theme: t, n: n, acc: s[1] / n, exp: s[2] / n, gap: gap, se: se, z: s[3] / sd,
+      lo: gap - Z95 * se, hi: gap + Z95 * se, shrunk: null, flag: "" });
+  });
+  var elig = out.filter(function (r) { return r.n >= minN; });
+  var tg = dlTau2(elig.map(function (r) { return r.gap; }), elig.map(function (r) { return r.se * r.se; }));
+  var tau2 = tg[0], grand = tg[1];
+  elig.forEach(function (r) {
+    var s2 = r.se * r.se, b = tau2 + s2 > 0 ? tau2 / (tau2 + s2) : 0;
+    r.shrunk = grand + b * (r.gap - grand);
+    if (r.z <= -zCrit && r.shrunk <= -minGap) r.flag = "weak";
+    else if (r.z >= zCrit && r.shrunk >= minGap) r.flag = "strong";
+  });
+  out.sort(function (a, b) {
+    var ga = a.shrunk !== null ? 0 : 1, gb = b.shrunk !== null ? 0 : 1;
+    if (ga !== gb) return ga - gb;
+    var va = a.shrunk !== null ? a.shrunk : a.gap, vb = b.shrunk !== null ? b.shrunk : b.gap;
+    if (va !== vb) return va - vb;
+    return a.theme < b.theme ? -1 : (a.theme > b.theme ? 1 : 0);
+  });
+  return { rows: out, tau2: tau2, grand: grand, k: elig.length, n: rows.length };
+}
+function tasksForGap(gap, variance, zCrit) {
+  variance = variance === undefined ? 0.2 : variance;
+  zCrit = zCrit === undefined ? Z_CRIT_THEME : zCrit;
+  return Math.ceil(Math.pow(zCrit + Z_POWER80, 2) * variance / (gap * gap));
+}
+function pct(x, d) { return (x * 100).toFixed(d === undefined ? 0 : d) + "%"; }
+function pp(x, d) { return (x >= 0 ? "+" : "") + (x * 100).toFixed(d === undefined ? 0 : d); }
+function pad(s, n) { s = String(s); while (s.length < n) s += " "; return s; }
+function buildReport(allRows) {
+  var rows = withoutHints(allRows), hinted = allRows.length - rows.length, n = rows.length;
+  if (!n) return allRows.length ? "все строки лога с подсказками: в статистику не идут" : "лог пуст";
+  var cs = calibrationSummary(rows);
+  var s = "задач в анализе: " + n + (hinted ? " (с подсказками исключено: " + hinted + ")" : "") + "\n";
+  s += "точность: " + pct(cs.acc, 1) + " [" + pct(cs.acc_lo) + "-" + pct(cs.acc_hi) + "]  средняя уверенность: " + pct(cs.mean_conf) + "\n";
+  s += "смещение: " + pp(cs.bias, 1) + " п.п., z=" + (cs.bias_z >= 0 ? "+" : "") + cs.bias_z.toFixed(1) + "\n";
+  s += "log-loss: " + cs.log_loss.toFixed(3) + " (константа " + cs.log_loss_base.toFixed(3) + ")  Brier: " +
+    cs.brier.toFixed(3) + "  навык: " + (cs.skill >= 0 ? "+" : "") + cs.skill.toFixed(2) + "\n";
+  s += "вердикт по калибровке: " + cs.verdict + (cs.verdict === "мало данных" ? " (нужно n >= " + MIN_N_CALIBRATION + ")" : "") + "\n";
+  s += "корзины уверенности (n, уверенность, точность [95%]):\n";
+  reliability(rows).forEach(function (b) {
+    s += "  " + b.lo + "-" + b.hi + ": n=" + b.n + "  " + pct(b.mean_conf) + "  " + pct(b.acc) +
+      " [" + pct(b.acc_lo) + "-" + pct(b.acc_hi) + "]\n";
+  });
+  var tt = themeTable(rows), flagged = 0;
+  s += "темы (только мотивы; прогноз Glicko, остатки центрированы по длине задачи):\n";
+  tt.rows.filter(function (r) { return r.n >= 5; }).slice(0, 12).forEach(function (r) {
+    if (r.flag) flagged++;
+    s += "  " + pad(r.theme, 17) + " n=" + pad(r.n, 3) + " факт " + pct(r.acc) + " прогноз " + pct(r.exp) +
+      " разрыв " + pp(r.gap) + " [" + pp(r.lo) + ".." + pp(r.hi) + "]" +
+      (r.shrunk !== null ? " усадка " + pp(r.shrunk) : " n<" + MIN_N_THEME) +
+      (r.flag === "weak" ? "  <-- СЛАБО" : (r.flag === "strong" ? "  <-- СИЛЬНО" : "")) + "\n";
+  });
+  if (!flagged) {
+    s += "флагов по темам нет: на этом объёме слабые темы статистически не видны (провал в 15 п.п. по одной теме замечается примерно с " +
+      tasksForGap(0.15) + " задач этой темы)\n";
+  }
+  return s;
+}
+
+/* --- Состояние --- */
+var POOL = EMBEDDED.slice();
+var LOG_KEY = "qgt_log";
+var log = [];
+try { log = JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); } catch (e) { log = []; }
+var session = null; // {queue, i, puzzle, st, legal, selected, pending, t0, rating, setName}
+var GLYPHS = { w: { k: "♔", q: "♕", r: "♖", b: "♗", n: "♘", p: "♙" }, b: { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" } };
+var $ = function (id) { return document.getElementById(id); };
+
+var LOG_FIELDS = ["ts", "user", "session", "puzzle_id", "rating", "themes", "set", "move", "solution",
+  "confidence", "correct", "winning", "seconds", "expected", "hints",
+  "mode", "line", "depth", "strict", "timeout"];   // как FIELDS в chess/session.py
+function csvCell(v) { return v === undefined || v === null ? "" : String(v).replace(/[",\r\n]/g, " "); }
+function newSessionId() {
+  return new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "-" + Math.random().toString(36).slice(2, 8);
+}
+function saveLog() { try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch (e) {} }
+function updatePoolInfo() {
+  var tr = POOL.filter(function (p) { return p.set === "train"; }).length;
+  var te = POOL.filter(function (p) { return p.set === "test"; }).length;
+  $("poolInfo").textContent = "задач в пуле: " + POOL.length + " (train " + tr + ", test " + te + "), в логе: " + log.length;
+}
+updatePoolInfo();
+
+$("conf").addEventListener("input", function () { $("confVal").textContent = $("conf").value + "%"; });
+
+$("fetchBtn").addEventListener("click", function () {
+  var nick = $("nick").value.trim();
+  if (!nick) { alert("Введи ник"); return; }
+  fetch("https://lichess.org/api/user/" + encodeURIComponent(nick))
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (d) {
+      var rt = d && d.perfs && d.perfs.puzzle && d.perfs.puzzle.rating;
+      if (rt) { $("rating").value = rt; alert("Рейтинг задач " + nick + ": " + rt); }
+      else alert("У пользователя нет рейтинга задач");
+    })
+    .catch(function (e) { alert("API недоступен: " + e.message + ". Введи рейтинг вручную."); });
+});
+
+$("csvFile").addEventListener("change", function (ev) {
+  var f = ev.target.files[0];
+  if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    var lines = rd.result.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var out = [];
+    for (var i = 1; i < lines.length; i++) {
+      var c = lines[i].split(",");
+      if (c.length < 5) continue;
+      out.push({ id: c[0], fen: c[1], sol: c[2], rating: +c[3], themes: c[4], set: hashSet(c[0]) });
+    }
+    if (!out.length) { alert("CSV не распознан (нужны колонки PuzzleId,FEN,Solution,Rating,Themes)"); return; }
+    POOL = out;
+    updatePoolInfo();
+    alert("Загружено задач: " + out.length);
+  };
+  rd.readAsText(f);
+});
+
+function renderBoard() {
+  var st = session.st;
+  var flip = st.turn === "b";
+  var boardEl = $("board");
+  boardEl.innerHTML = "";
+  for (var disp = 0; disp < 64; disp++) {
+    var r = Math.floor(disp / 8), f = disp % 8;
+    var sq = flip ? (7 - r) * 8 + (7 - f) : r * 8 + f;
+    var cell = document.createElement("div");
+    cell.className = "sq " + (((Math.floor(sq / 8) + sq % 8) % 2 === 0) ? "light" : "dark");
+    cell.dataset.sq = sq;
+    var piece = st.board[sq];
+    if (piece) {
+      var sp = document.createElement("span");
+      sp.className = piece.c === "w" ? "piece-w" : "piece-b";
+      sp.textContent = GLYPHS[piece.c][piece.t];
+      cell.appendChild(sp);
+    }
+    if (session.selected === sq) cell.classList.add("sel");
+    if (session.targets && session.targets.indexOf(sq) !== -1) cell.classList.add("tgt");
+    cell.addEventListener("click", function () { onSquare(+this.dataset.sq); });
+    boardEl.appendChild(cell);
+  }
+}
+function legalFrom(sq) {
+  return session.legal.filter(function (m) { return m.from === sq; });
+}
+function onSquare(sq) {
+  if (session.answered) return;
+  var st = session.st;
+  if (session.selected === null) {
+    var p = st.board[sq];
+    if (p && p.c === st.turn) {
+      session.selected = sq;
+      session.targets = legalFrom(sq).map(function (m) { return m.to; });
+      renderBoard();
+    }
+    return;
+  }
+  if (sq === session.selected) { session.selected = null; session.targets = []; renderBoard(); return; }
+  var cand = legalFrom(session.selected).filter(function (m) { return m.to === sq; });
+  if (cand.length) {
+    if (cand.length > 1 && cand[0].promotion) {
+      // превращение — показать выбор
+      session.promoFrom = session.selected; session.promoTo = sq;
+      $("promoPicker").style.display = "block";
+      return;
+    }
+    applyMove(cand[0]);
+    return;
+  }
+  var p = st.board[sq];
+  if (p && p.c === st.turn) {
+    session.selected = sq;
+    session.targets = legalFrom(sq).map(function (m) { return m.to; });
+    renderBoard();
+  }
+}
+$("promoPicker").addEventListener("click", function (ev) {
+  var pr = ev.target.dataset && ev.target.dataset.p;
+  if (!pr) return;
+  var cand = legalFrom(session.promoFrom).filter(function (m) { return m.to === session.promoTo && m.promotion === pr; });
+  $("promoPicker").style.display = "none";
+  if (cand.length) applyMove(cand[0]);
+});
+function applyMove(m) {
+  session.pending = m;
+  session.st = makeMove(session.st, m);
+  session.selected = null; session.targets = [];
+  $("submitBtn").disabled = false;
+  $("status").textContent = "Твой ход: " + moveUCI(m) + ". Поставь уверенность и нажми «Ответить».";
+  renderBoard();
+}
+function showPuzzle() {
+  var p = session.queue[session.i];
+  session.puzzle = p;
+  session.st = parseFEN(p.fen);
+  session.legal = genLegal(session.st, session.st.turn);
+  session.selected = null; session.targets = []; session.pending = null; session.answered = false;
+  session.t0 = performance.now();
+  $("game").style.display = "block";
+  $("puzzleInfo").textContent = "[" + (session.i + 1) + "/" + session.queue.length + "] " + p.id +
+    (session.hints ? "  рейтинг " + p.rating + "  темы: " + p.themes : "") + "  (" + (session.st.turn === "w" ? "ход белых" : "ход чёрных") + ")";
+  $("status").textContent = "Выбери фигуру и клетку назначения.";
+  $("feedback").textContent = ""; $("feedback").className = "";
+  $("submitBtn").disabled = true;
+  $("nextBtn").style.display = "none";
+  $("conf").value = 50; $("confVal").textContent = "50%";
+  renderBoard();
+}
+$("startBtn").addEventListener("click", function () {
+  var setName = $("setSel").value;
+  var n = Math.max(1, Math.min(100, +$("nInput").value || 10));
+  var rating = +$("rating").value || 886;
+  var solved = {};
+  for (var r of log) solved[r.puzzle_id] = true;
+  var pool = POOL.filter(function (p) { return p.set === setName && !solved[p.id]; });
+  if (pool.length < n) pool = POOL.filter(function (p) { return p.set === setName; });
+  // перетасовать
+  for (var i = pool.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
+  var queue = pool.slice(0, Math.min(n, pool.length));
+  if (!queue.length) { alert("Нет задач в сете " + setName); return; }
+  session = { queue: queue, i: 0, rating: rating, setName: setName,
+    hints: !!$("hintsChk").checked, user: ($("nick").value.trim() || "anon"), id: newSessionId() };
+  showPuzzle();
+});
+$("submitBtn").addEventListener("click", function () {
+  if (!session.pending || session.answered) return;
+  session.answered = true;
+  var dt = (performance.now() - session.t0) / 1000;
+  var mv = moveUCI(session.pending);
+  var p = session.puzzle;
+  var correct = (mv === p.sol);
+  var conf = +$("conf").value;
+  var exp = expectedP(session.rating, p.rating);
+  log.push({ ts: new Date().toISOString(), user: session.user, session: session.id,
+    puzzle_id: p.id, rating: p.rating, themes: p.themes, set: session.setName, move: mv,
+    solution: p.sol, confidence: conf, correct: correct ? 1 : 0, winning: correct ? 1 : 0,
+    seconds: Math.round(dt * 10) / 10, expected: Math.round(exp * 1000) / 1000,
+    hints: session.hints ? 1 : 0, mode: "classic", line: "", depth: "", strict: "", timeout: 0 });
+  saveLog();
+  $("feedback").textContent = (correct ? "ВЕРНО" : "МИМО (решение: " + p.sol + ")") +
+    ". Рейтинг задачи " + p.rating + ", темы: " + p.themes + ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + dt.toFixed(1) + " c.";
+  $("feedback").className = correct ? "ok" : "bad";
+  $("submitBtn").disabled = true;
+  $("nextBtn").style.display = "inline-block";
+  updatePoolInfo();
+});
+$("nextBtn").addEventListener("click", function () {
+  session.i++;
+  if (session.i >= session.queue.length) {
+    $("game").style.display = "none";
+    $("reportOut").textContent = "--- итог сессии ---\n" + buildReport(log);
+  } else showPuzzle();
+});
+$("reportBtn").addEventListener("click", function () { $("reportOut").textContent = buildReport(log); });
+$("exportBtn").addEventListener("click", function () {
+  var F = LOG_FIELDS;
+  var lines = [F.join(",")];
+  for (var r of log) lines.push(F.map(function (k) { return csvCell(r[k]); }).join(","));
+  var blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "trainer_log.csv"; a.click();
+});
+$("clearBtn").addEventListener("click", function () {
+  if (!confirm("Очистить весь лог?")) return;
+  log = []; saveLog(); updatePoolInfo(); $("reportOut").textContent = "лог очищен";
+});
+</script>
+</body>
+</html>

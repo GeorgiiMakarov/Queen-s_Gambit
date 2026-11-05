@@ -14,7 +14,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install python-chess
       - run: python3 common/test_common.py
       - run: python3 common/test_stats.py
       - run: python3 common/make_golden.py --check
+      - run: python3 chess/test_session.py
+      - run: python3 chess/test_trainer_smoke.py
+      - run: node chess/test_web.js
       - run: python3 mahjong/danger_ev.v041_frozen.py
