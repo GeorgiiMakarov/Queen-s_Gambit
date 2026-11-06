@@ -230,5 +230,122 @@ check("в векторах есть флаг weak (проверяется неп
 }));
 check("tasksForGap(0.15) = 132 как в Python", ctx.tasksForGap(0.15) === 132);
 
+// ---------------------------------------------------------------- 5. режимы: паритет скоринга и UI
+const mv = JSON.parse(fs.readFileSync(path.join(GOLD, "mode_vectors.json"), "utf8"));
+check("паритет scoreIntuition: " + mv.intuition.length + " векторов", mv.intuition.every(function (v) {
+  const r = ctx.scoreIntuition(v.fen, v.move, v.sol, v.themes, v.dt, v.limit);
+  return r.correct === v.correct && r.winning === v.winning && r.timeout === v.timeout && r.confidence === v.confidence;
+}));
+check("паритет scoreCalc: " + mv.calc.length + " векторов", mv.calc.every(function (v) {
+  const r = ctx.scoreCalc(v.fen, v.entered, v.sol_line);
+  return r.strict === v.strict && r.depth === v.depth;
+}));
+
+function makeClockPage() {
+  const pg = makePage();
+  let now = 1000000;
+  pg.ctx.performance.now = function () { return now; };
+  pg.advance = function (ms) { now += ms; };
+  return pg;
+}
+function setupMode(pg, o) {
+  pg.els.setSel.value = o.set || "train";
+  pg.els.nInput.value = String(o.n || 2);
+  pg.els.rating.value = String(o.rating || 886);
+  pg.els.nick.value = "tester";
+  pg.els.modeSel.value = o.mode;
+  pg.els.startBtn.click();
+}
+function calcRows(file) {
+  return fs.readFileSync(file, "utf8").split(/\r?\n/).filter(function (l) { return l.trim(); }).slice(1).map(function (l) {
+    const p = l.split(",");
+    return { id: p[0], fen: p[1], sol: p[2], line: p[3], rating: +p[4], themes: p[5] || "" };
+  });
+}
+
+// интуиция: полоса, верный ход вовремя, таймаут, исключение виденных
+const I = makeClockPage();
+setupMode(I, { mode: "intuition", n: 3, rating: 886 });
+check("intuition: очередь только в полосе ±200 и сете train",
+  I.ctx.session.queue.length > 0 && I.ctx.session.queue.every(function (p) { return p.set === "train" && Math.abs(p.rating - 886) <= 200; }));
+const sI = I.ctx.session, pI = sI.puzzle;
+const solMv = sI.legal.filter(function (m) { return I.ctx.moveUCI(m) === pI.sol; })[0];
+I.advance(3000);
+I.ctx.applyMove(solMv);
+I.els.conf.value = "70";
+I.els.submitBtn.click();
+check("intuition: верный ход вовремя -> correct 1, timeout 0, уверенность из слайдера",
+  I.ctx.log[0].mode === "intuition" && I.ctx.log[0].correct === 1 && I.ctx.log[0].timeout === 0 && I.ctx.log[0].confidence === 70);
+I.els.nextBtn.click();
+I.advance(11000);
+const sI2 = I.ctx.session, anyMv = sI2.legal[0];
+I.ctx.applyMove(anyMv);
+check("intuition: ход после 11 с -> таймаут, промах, уверенность 0, без кнопки «Ответить»",
+  I.ctx.log[1].mode === "intuition" && I.ctx.log[1].correct === 0 && I.ctx.log[1].timeout === 1 &&
+  I.ctx.log[1].confidence === 0 && /ТАЙМАУТ/.test(I.els.feedback.textContent));
+const solvedI = I.ctx.log.map(function (r) { return r.puzzle_id; });
+setupMode(I, { mode: "intuition", n: 3, rating: 886 });
+check("intuition: уже решённые id не предлагаются снова",
+  I.ctx.session.queue.every(function (p) { return solvedI.indexOf(p.id) === -1; }));
+
+// интуиция: альтернативный мат в mateIn1 (задача 00EWi из векторов)
+const M = makeClockPage();
+const vMate = mv.intuition.filter(function (v) { return v.move === "h6h5"; })[0];
+const rowMate = PUZ.filter(function (r) { return r.fen === vMate.fen; })[0];
+M.ctx.POOL = [{ id: "00EWi", fen: vMate.fen, sol: vMate.sol, rating: rowMate.rating, themes: vMate.themes, set: "train" }];
+setupMode(M, { mode: "intuition", n: 1, rating: rowMate.rating });
+const altMv = M.ctx.session.legal.filter(function (m) { return M.ctx.moveUCI(m) === "h6h5"; })[0];
+M.ctx.applyMove(altMv);
+M.els.conf.value = "70";
+M.els.submitBtn.click();
+check("intuition: альтернативный мат в mateIn1 засчитан", M.ctx.log[0].correct === 1 && M.ctx.log[0].mode === "intuition");
+
+// classic: другой выигрыш теперь считается движком (задача 0000D из векторов)
+const W = makeClockPage();
+const vWin = mv.intuition.filter(function (v) { return v.move === "b6d6"; })[0];
+const rowWin = PUZ.filter(function (r) { return r.fen === vWin.fen; })[0];
+W.ctx.POOL = [{ id: "0000D", fen: vWin.fen, sol: vWin.sol, rating: rowWin.rating, themes: vWin.themes, set: "train" }];
+setupMode(W, { mode: "classic", n: 1, rating: rowWin.rating });
+const winMv = W.ctx.session.legal.filter(function (m) { return W.ctx.moveUCI(m) === "b6d6"; })[0];
+W.ctx.applyMove(winMv);
+W.els.conf.value = "70";
+W.els.submitBtn.click();
+check("classic: другой выигрыш -> winning 1, correct 0", W.ctx.log[0].winning === 1 && W.ctx.log[0].correct === 0);
+check("classic: фидбэк «ВЫИГРЫШ (другой ход)»", /ВЫИГРЫШ \(другой ход\)/.test(W.els.feedback.textContent));
+
+// расчёт: полоса, верная линия, ошибка на 2-м ходу, мягкий лимит, экспорт
+const CC = makeClockPage();
+setupMode(CC, { mode: "calc", n: 2, rating: 886 });
+check("calc: очередь из CALC_POOL, полоса ±200, сет train",
+  CC.ctx.session.queue.length > 0 && CC.ctx.session.queue.every(function (p) { return p.line && p.set === "train" && Math.abs(p.rating - 886) <= 200; }));
+const pC = CC.ctx.session.puzzle;
+CC.els.lineInput.value = pC.line;
+CC.els.conf.value = "70";
+CC.els.submitBtn.click();
+check("calc: верная линия -> strict 1, depth = длине линии",
+  CC.ctx.log[0].mode === "calc" && CC.ctx.log[0].strict === 1 &&
+  CC.ctx.log[0].depth === pC.line.split(" ").length && CC.ctx.log[0].line === pC.line);
+CC.els.nextBtn.click();
+const pC2 = CC.ctx.session.puzzle;
+const sol2 = pC2.line.split(" ");
+CC.advance(181000);
+CC.els.lineInput.value = sol2[0] + " a1a1 " + sol2.slice(2).join(" ");
+CC.els.conf.value = "60";
+CC.els.submitBtn.click();
+check("calc: ошибка на 2-м ходу -> strict 0, depth 1", CC.ctx.log[1].strict === 0 && CC.ctx.log[1].depth === 1);
+check("calc: мягкий лимит 180 с только логируется",
+  /Мягкий лимит превышен/.test(CC.els.feedback.textContent) && CC.ctx.log[1].seconds > 180);
+CC.els.exportBtn.click();
+const csvC = CC.blobs[CC.blobs.length - 1] || "";
+check("экспорт: строки calc с line/depth/strict/mode (20 колонок)",
+  csvC.split("\n").length === 3 && csvC.split("\n")[1].split(",").length === 20 && /calc/.test(csvC));
+
+// отчёт разделяет режимы и даёт профиль
+const mixedModes = A.ctx.log.concat(I.ctx.log, CC.ctx.log);
+const rep = B.ctx.buildReport(mixedModes);
+check("отчёт: разделы по режимам intuition и calc",
+  rep.indexOf("===== режим intuition =====") !== -1 && rep.indexOf("===== режим calc =====") !== -1);
+check("отчёт: профиль «выводы рано» при n < 100", /профиль: выводы рано/.test(rep));
+
 console.log("web selftest: " + ok + "/" + total);
 process.exit(ok === total ? 0 : 1);

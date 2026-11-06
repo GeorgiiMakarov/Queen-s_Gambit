@@ -18,9 +18,12 @@ jobs:
         with:
           node-version: "22"
       - run: pip install python-chess
+      - run: python3 chess/expectation_check.py --selftest
+      - run: python3 chess/trainer.py --selftest
       - run: python3 common/test_common.py
       - run: python3 common/test_stats.py
       - run: python3 common/make_golden.py --check
+      - run: python3 chess/build_index.py --check
       - run: python3 chess/test_session.py
       - run: python3 chess/test_trainer_smoke.py
       - run: node chess/test_web.js

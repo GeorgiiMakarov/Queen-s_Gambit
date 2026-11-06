@@ -69,7 +69,7 @@ def tool_report(path):
         flag = "САМОУВЕРЕННОСТЬ" if conclusions and mc / 100 > ac + 0.15 else ""
         out.append("  %3d-%3d: n=%3d  уверенность %.0f%%  точность %.0f%%  %s"
                    % (b, b + 24, cnt, mc, ac * 100, flag))
-    out.append("таблица опасности по темам (факт vs прогноз Glicko):")
+    out.append("таблица опасности по темам (факт vs прогноз по Elo-логисте):")
     for gap, t, cnt, ac, ex in danger_table(rows):
         flag = " <-- ХУЖЕ ПРОГНОЗА" if conclusions and gap < -0.15 else ""
         out.append("  %-18s n=%3d  факт %.0f%%  прогноз %.0f%%  разрыв %+.0f%%%s"
@@ -100,7 +100,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"log": {"type": "string"}}, "required": []}},
     {"name": "trainer_report", "description": "Полный отчёт: калибровка по корзинам уверенности + таблица опасности по темам",
      "inputSchema": {"type": "object", "properties": {"log": {"type": "string"}}, "required": []}},
-    {"name": "trainer_danger_table", "description": "Таблица опасности по темам (факт vs прогноз Glicko), JSON",
+    {"name": "trainer_danger_table", "description": "Таблица опасности по темам (факт vs прогноз по Elo-логисте), JSON",
      "inputSchema": {"type": "object", "properties": {"log": {"type": "string"}}, "required": []}},
     {"name": "trainer_log", "description": "Последние N строк лога тренажёра, JSON",
      "inputSchema": {"type": "object", "properties": {"log": {"type": "string"}, "limit": {"type": "integer"}}, "required": []}},

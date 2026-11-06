@@ -27,11 +27,13 @@ small{color:#666}
 <body>
 <h1>Тренажёр тактики</h1>
 <div class="panel" id="setup">
-<label>Ник Lichess: <input id="nick" placeholder="Georgii_Makarov" size="18">
+<label>Ник Lichess: <input id="nick" placeholder="ник Lichess" size="18">
 <button id="fetchBtn">Подтянуть рейтинг</button></label>
 <label>Рейтинг задач: <input id="rating" type="number" value="886" min="400" max="3500"></label>
 <label>Сет: <select id="setSel"><option value="train">train (практика)</option><option value="test">test (проверка)</option></select></label>
 <label>Задач в сессии: <input id="nInput" type="number" value="10" min="1" max="100"></label>
+<label>Режим: <select id="modeSel"><option value="classic">Classic — один ход</option><option value="intuition">Интуиция — первый ход, 10 с</option><option value="calc">Расчёт — линия вслепую</option></select></label>
+<label><input type="checkbox" id="hintsChk"> Подсказки (тренировка, в статистику не идёт)</label>
 <button id="startBtn">Старт</button>
 <label>Свои задачи (CSV puzzles_sample.csv): <input type="file" id="csvFile" accept=".csv"></label>
 <span id="poolInfo"></span>
@@ -40,6 +42,10 @@ small{color:#666}
 <div id="puzzleInfo"></div>
 <div id="board"></div>
 <div id="status"></div>
+<div id="timerLine" style="display:none"></div>
+<div id="lineInputWrap" style="display:none">
+<label>Линия (UCI через пробел): <input id="lineInput" size="42" placeholder="e2e4 e7e5 ..."></label>
+</div>
 <div id="promoPicker" style="display:none">Превращение:
 <button data-p="q">Ферзь</button><button data-p="r">Ладья</button><button data-p="b">Слон</button><button data-p="n">Конь</button>
 </div>
@@ -55,12 +61,15 @@ small{color:#666}
 <button id="exportBtn">Скачать CSV (trainer_log.csv)</button>
 <button id="clearBtn">Очистить лог</button>
 <pre id="reportOut"></pre>
-<small>winning = correct: проверка движком «другой выигрыш» в веб-версии недоступна.
+<small>Рейтинг и темы задачи показываются только после ответа (с галочкой «Подсказки» сразу, но такие строки не попадают в отчёт).
+В режимах «Интуиция» и «Расчёт» задачи подбираются в полосе ±200 от твоего рейтинга и не повторяются (уже решённые исключаются).
 Лог хранится в браузере (localStorage), скачивай CSV для архива.</small>
 </div>
 <script>
 /* __PUZZLES_JSON__ — вставит генератор (200 задач: 100 train + 100 test, сплит по MD5 как в common.hash_split) */
 var EMBEDDED = __PUZZLES_JSON__;
+/* __CALC_JSON__ — вставит генератор (1800 задач calc: long/veryLong, Moves >= 6, сплит по MD5 как в common.hash_split) */
+var EMBEDDED_CALC = __CALC_JSON__;
 
 /* --- MD5 (RFC 1321), для сплита train/test при загрузке своего CSV --- */
 function md5(input) {
@@ -127,7 +136,11 @@ function md5(input) {
   return out;
 }
 function hashSet(id) {
-  return (parseInt(md5(id), 16) % 1000) / 1000 < 0.5 ? "train" : "test";
+  // Точный md5 mod 1000 как в Python (int(hex, 16) % 1000): остаток считаем по цифрам,
+  // parseInt от 128-битного hex терял точность и давал другой сплит на ~48% id.
+  var h = md5(id), r = 0;
+  for (var i = 0; i < h.length; i++) r = (r * 16 + parseInt(h.charAt(i), 16)) % 1000;
+  return r / 1000 < 0.5 ? "train" : "test";
 }
 
 /* --- Шахматы: FEN + легальные ходы (своя реализация) --- */
@@ -236,7 +249,7 @@ function genPseudo(st, color) {
           var ocol = opp(color);
           for (var side of [ks, qs]) {
             if (!st.castling.includes(side)) continue;
-            var c = CASTLE[color][side];
+            var c = CASTLE[color][side.toUpperCase()];
             var rook = st.board[c.rookFrom];
             if (!rook || rook.t !== "r" || rook.c !== color) continue;
             if (!c.empty.every(function (s) { return !st.board[s]; })) continue;
@@ -270,7 +283,7 @@ function makeMove(st, m) {
   var piece = nb[m.from];
   nb[m.from] = null;
   if (m.ep) nb[idx(fileOf(m.to), rankOf(m.from))] = null;
-  if (m.castle) { var c = CASTLE[piece.c][m.castle]; nb[c.rookTo] = nb[c.rookFrom]; nb[c.rookFrom] = null; }
+  if (m.castle) { var c = CASTLE[piece.c][m.castle.toUpperCase()]; nb[c.rookTo] = nb[c.rookFrom]; nb[c.rookFrom] = null; }
   nb[m.to] = { t: m.promotion || piece.t, c: piece.c };
   var castling = st.castling;
   if (piece.t === "k") castling = castling.replace(piece.c === "w" ? /[KQ]/g : /[kq]/g, "");
@@ -303,73 +316,301 @@ function genLegal(st, color) {
 }
 function moveUCI(m) { return sqName(m.from) + sqName(m.to) + (m.promotion || ""); }
 
-/* --- Калибровка (как common/calibration.py) --- */
+/* --- Скоринг режимов: порт trainer.score_intuition / score_calc (паритет проверяет test_web.js по common/golden/mode_vectors.json) --- */
+var PIECE_VAL = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
+function findMove(st, uci) {
+  var legal = genLegal(st, st.turn);
+  for (var i = 0; i < legal.length; i++) if (moveUCI(legal[i]) === uci) return legal[i];
+  return null;
+}
+function isCheckmate(st) {
+  var ksq = findKing(st, st.turn);
+  return ksq !== -1 && genLegal(st, st.turn).length === 0 && isAttacked(st, ksq, opp(st.turn));
+}
+function matesFrom(st, moveUci) {
+  var m = findMove(st, moveUci);
+  if (!m) return false;
+  return isCheckmate(makeMove(st, m));
+}
+function mates(fen, moveUci) { return matesFrom(parseFEN(fen), moveUci); }
+function isWinning(fen, moveUci) {
+  var st = parseFEN(fen), m = findMove(st, moveUci);
+  if (!m) return false;
+  var captured = st.board[m.to];
+  if (isCheckmate(makeMove(st, m))) return true;
+  if (captured && PIECE_VAL[captured.t] >= 500) return true;
+  return false;
+}
+function scoreIntuition(fen, moveS, sol, themes, dt, limit) {
+  if (dt > limit) return { correct: 0, winning: 0, timeout: 1, confidence: 0 };
+  var correct = (moveS === sol) ? 1 : 0;
+  if (!correct && String(themes || "").split(/\s+/).indexOf("mateIn1") !== -1 && mates(fen, moveS)) correct = 1;
+  var winning = (correct || isWinning(fen, moveS)) ? 1 : 0;
+  return { correct: correct, winning: winning, timeout: 0, confidence: null };
+}
+function finalMates(fen, solLineS) {
+  var st = parseFEN(fen);
+  var parts = String(solLineS || "").split(/\s+/).filter(Boolean);
+  for (var i = 0; i < parts.length; i++) {
+    var m = findMove(st, parts[i]);
+    if (!m) return false;
+    st = makeMove(st, m);
+  }
+  return isCheckmate(st);
+}
+function scoreCalc(fen, enteredS, solLineS) {
+  var sol = String(solLineS || "").split(/\s+/).filter(Boolean);
+  var entered = String(enteredS || "").trim() ? String(enteredS).trim().split(/\s+/) : [];
+  if (entered.length === sol.length && entered.every(function (x, i) { return x === sol[i]; })) return { strict: 1, depth: sol.length };
+  var depth = 0;
+  while (depth < Math.min(entered.length, sol.length) && entered[depth] === sol[depth]) depth++;
+  if (depth === sol.length - 1 && entered.length >= sol.length && finalMates(fen, solLineS)) {
+    var st = parseFEN(fen), ok = true;
+    for (var i = 0; i < sol.length - 1; i++) {
+      var m = findMove(st, entered[i]);
+      if (!m) { ok = false; break; }
+      st = makeMove(st, m);
+    }
+    if (ok && matesFrom(st, entered[sol.length - 1])) return { strict: 1, depth: sol.length };
+  }
+  return { strict: 0, depth: depth };
+}
+
+/* --- Калибровка и таблица тем: порт common/stats.py (паритет проверяет test_web.js) --- */
+var Z95 = 1.959963984540054, Z_POWER80 = 0.8416212335729143;
+var MIN_N_CALIBRATION = 30, MIN_N_THEME = 20, Z_CRIT_THEME = 3.0, MIN_GAP_THEME = 0.05;
+var SERVICE_TAGS = { advantage: 1, crushing: 1, equality: 1, opening: 1, middlegame: 1, endgame: 1,
+  oneMove: 1, short: 1, long: 1, veryLong: 1, mate: 1, master: 1, masterVsMaster: 1, superGM: 1 };
+var LENGTH_CLASS = { oneMove: 1, short: 2, long: 3, veryLong: 4 };
+function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+function clamp(x, lo, hi) { return Math.min(Math.max(x, lo), hi); }
+function tagsOf(themes) { return String(themes || "").split(/\s+/).filter(Boolean); }
+function lengthClass(themes) {
+  var t = tagsOf(themes);
+  for (var i = 0; i < t.length; i++) if (has(LENGTH_CLASS, t[i])) return LENGTH_CLASS[t[i]];
+  return 0;
+}
 function expectedP(userRating, itemRating) {
   return 1 / (1 + Math.pow(10, -(userRating - itemRating) / 400));
 }
-function logLoss(rows) {
-  if (!rows.length) return NaN;
-  var tot = 0;
-  for (var r of rows) {
-    var p = Math.min(Math.max(r.confidence / 100, 0.01), 0.99);
-    var y = r.correct ? 1 : 0;
-    tot += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
-  }
-  return tot / rows.length;
+function isHint(r) {
+  var v = String(r.hints == null || r.hints === "" ? "0" : r.hints).trim().toLowerCase();
+  return !(v === "0" || v === "0.0" || v === "false" || v === "");
 }
-function calibrationBuckets(rows) {
-  var buckets = {};
-  for (var r of rows) {
-    var b = Math.min(Math.floor(r.confidence / 25) * 25, 75);
-    (buckets[b] = buckets[b] || []).push(r);
+function withoutHints(rows) { return rows.filter(function (r) { return !isHint(r); }); }
+function hitOf(r) { return Math.trunc(Number(r.correct)) ? 1 : 0; }
+function confOf(r) { return clamp(Number(r.confidence) / 100, 0.01, 0.99); }
+function expOf(r) { return clamp(Number(r.expected), 0.01, 0.99); }
+function wilson(k, n, z) {
+  z = z === undefined ? Z95 : z;
+  if (n <= 0) return [0, 1];
+  var p = k / n, z2 = z * z, denom = 1 + z2 / n;
+  var centre = (p + z2 / (2 * n)) / denom;
+  var half = z * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / denom;
+  return [Math.max(0, centre - half), Math.min(1, centre + half)];
+}
+function calibrationSummary(rows) {
+  var n = rows.length;
+  var out = { n: n, acc: null, acc_lo: null, acc_hi: null, mean_conf: null, bias: null, bias_z: null,
+    log_loss: null, log_loss_base: null, skill: null, brier: null, verdict: "нет данных" };
+  if (!n) return out;
+  var k = 0, sp = 0, ll = 0, brier = 0, variance = 0, i, y, p;
+  for (i = 0; i < n; i++) {
+    y = hitOf(rows[i]); p = confOf(rows[i]);
+    k += y; sp += p;
+    ll += -(y * Math.log(p) + (1 - y) * Math.log(1 - p));
+    brier += (p - y) * (p - y);
+    variance += p * (1 - p);
   }
-  return Object.keys(buckets).sort(function (a, b) { return a - b; }).map(function (b) {
-    var sub = buckets[b];
-    var mc = sub.reduce(function (s, x) { return s + x.confidence; }, 0) / sub.length;
-    var ac = sub.filter(function (x) { return x.correct; }).length / sub.length;
-    return { b: +b, n: sub.length, mc: mc, ac: ac };
+  var acc = k / n, w = wilson(k, n);
+  var pb = clamp(acc, 0.01, 0.99), llBase = 0;
+  for (i = 0; i < n; i++) { y = hitOf(rows[i]); llBase += -(y * Math.log(pb) + (1 - y) * Math.log(1 - pb)); }
+  ll /= n; llBase /= n; brier /= n;
+  var meanConf = sp / n, z = (sp - k) / Math.sqrt(variance), bias = meanConf - acc, verdict;
+  if (n < MIN_N_CALIBRATION) verdict = "мало данных";
+  else if (z >= 2 && bias >= 0.05) verdict = "самоуверенность";
+  else if (z <= -2 && bias <= -0.05) verdict = "недоуверенность";
+  else verdict = "в пределах шума";
+  out.acc = acc; out.acc_lo = w[0]; out.acc_hi = w[1]; out.mean_conf = meanConf; out.bias = bias;
+  out.bias_z = z; out.log_loss = ll; out.log_loss_base = llBase; out.skill = 1 - ll / llBase;
+  out.brier = brier; out.verdict = verdict;
+  return out;
+}
+function reliability(rows, edges) {
+  edges = edges || [0, 20, 40, 60, 80, 100];
+  var k = edges.length - 1, bins = [], i, j;
+  for (i = 0; i < k; i++) bins.push([]);
+  rows.forEach(function (r) {
+    var c = Number(r.confidence), b = k - 1;
+    for (j = 0; j < k; j++) if (c < edges[j + 1]) { b = j; break; }
+    bins[b].push(r);
   });
+  var out = [];
+  bins.forEach(function (sub, idx) {
+    if (!sub.length) return;
+    var n = sub.length, kk = 0, sc = 0;
+    sub.forEach(function (r) { kk += hitOf(r); sc += Number(r.confidence); });
+    var w = wilson(kk, n);
+    out.push({ lo: edges[idx], hi: edges[idx + 1], n: n, mean_conf: sc / n / 100, acc: kk / n,
+      acc_lo: w[0], acc_hi: w[1] });
+  });
+  return out;
 }
-function dangerTable(rows, minN) {
-  minN = minN || 3;
-  var byTheme = {};
-  for (var r of rows) for (var t of r.themes.split(/\s+/)) {
-    if (!t) continue;
-    (byTheme[t] = byTheme[t] || []).push(r);
+function dlTau2(gaps, variances) {
+  var k = gaps.length, i;
+  if (!k) return [0, 0];
+  var w = variances.map(function (v) { return 1 / Math.max(v, 1e-12); });
+  var sw = 0, sg = 0;
+  for (i = 0; i < k; i++) { sw += w[i]; sg += w[i] * gaps[i]; }
+  var grand = sg / sw;
+  if (k < 2) return [0, grand];
+  var q = 0, sw2 = 0;
+  for (i = 0; i < k; i++) { q += w[i] * (gaps[i] - grand) * (gaps[i] - grand); sw2 += w[i] * w[i]; }
+  var c = sw - sw2 / sw;
+  return [c > 0 ? Math.max(0, (q - (k - 1)) / c) : 0, grand];
+}
+function residuals(rows, center) {
+  var res = [], vr = [], i;
+  for (i = 0; i < rows.length; i++) {
+    var e = expOf(rows[i]);
+    res.push(hitOf(rows[i]) - e); vr.push(e * (1 - e));
+  }
+  if (center && res.length) {
+    var tot = 0;
+    for (i = 0; i < res.length; i++) tot += res[i];
+    var allmean = tot / res.length, groups = {};
+    for (i = 0; i < rows.length; i++) {
+      var lc = lengthClass(rows[i].themes);
+      (groups[lc] = groups[lc] || []).push(res[i]);
+    }
+    var means = {};
+    Object.keys(groups).forEach(function (g) {
+      var v = groups[g], s = 0;
+      for (var j = 0; j < v.length; j++) s += v[j];
+      means[g] = v.length >= 10 ? s / v.length : allmean;
+    });
+    for (i = 0; i < rows.length; i++) res[i] = res[i] - means[lengthClass(rows[i].themes)];
+  }
+  return [res, vr];
+}
+function themeTable(rows, minN, zCrit, minGap, center) {
+  minN = minN === undefined ? MIN_N_THEME : minN;
+  zCrit = zCrit === undefined ? Z_CRIT_THEME : zCrit;
+  minGap = minGap === undefined ? MIN_GAP_THEME : minGap;
+  center = center === undefined ? true : center;
+  var rv = residuals(rows, center), res = rv[0], vr = rv[1], acc = {}, order = [], i;
+  for (i = 0; i < rows.length; i++) {
+    var e = expOf(rows[i]), tags = tagsOf(rows[i].themes);
+    for (var j = 0; j < tags.length; j++) {
+      var t = tags[j];
+      if (has(SERVICE_TAGS, t)) continue;
+      if (!has(acc, t)) { acc[t] = [0, 0, 0, 0, 0]; order.push(t); }
+      var s = acc[t];
+      s[0] += 1; s[1] += hitOf(rows[i]); s[2] += e; s[3] += res[i]; s[4] += vr[i];
+    }
   }
   var out = [];
-  for (var t in byTheme) {
-    var sub = byTheme[t];
-    if (sub.length < minN) continue;
-    var ac = sub.filter(function (x) { return x.correct; }).length / sub.length;
-    var ex = sub.reduce(function (s, x) { return s + x.expected; }, 0) / sub.length;
-    out.push({ gap: ac - ex, t: t, n: sub.length, ac: ac, ex: ex });
-  }
-  return out.sort(function (a, b) { return a.gap - b.gap; });
+  order.forEach(function (t) {
+    var s = acc[t], n = s[0];
+    if (n < 3) return;
+    var sd = Math.sqrt(s[4]), gap = s[3] / n, se = sd / n;
+    out.push({ theme: t, n: n, acc: s[1] / n, exp: s[2] / n, gap: gap, se: se, z: s[3] / sd,
+      lo: gap - Z95 * se, hi: gap + Z95 * se, shrunk: null, flag: "" });
+  });
+  var elig = out.filter(function (r) { return r.n >= minN; });
+  var tg = dlTau2(elig.map(function (r) { return r.gap; }), elig.map(function (r) { return r.se * r.se; }));
+  var tau2 = tg[0], grand = tg[1];
+  elig.forEach(function (r) {
+    var s2 = r.se * r.se, b = tau2 + s2 > 0 ? tau2 / (tau2 + s2) : 0;
+    r.shrunk = grand + b * (r.gap - grand);
+    if (r.z <= -zCrit && r.shrunk <= -minGap) r.flag = "weak";
+    else if (r.z >= zCrit && r.shrunk >= minGap) r.flag = "strong";
+  });
+  out.sort(function (a, b) {
+    var ga = a.shrunk !== null ? 0 : 1, gb = b.shrunk !== null ? 0 : 1;
+    if (ga !== gb) return ga - gb;
+    var va = a.shrunk !== null ? a.shrunk : a.gap, vb = b.shrunk !== null ? b.shrunk : b.gap;
+    if (va !== vb) return va - vb;
+    return a.theme < b.theme ? -1 : (a.theme > b.theme ? 1 : 0);
+  });
+  return { rows: out, tau2: tau2, grand: grand, k: elig.length, n: rows.length };
 }
-function buildReport(rows) {
-  var n = rows.length;
-  if (!n) return "лог пуст";
-  var acc = rows.filter(function (r) { return r.correct; }).length / n;
-  var s = "задач: " + n + "  точность: " + (acc * 100).toFixed(1) + "%  log-loss уверенности: " + logLoss(rows).toFixed(3) + "\n";
-  var conclusions = n >= 100;
-  if (!conclusions) s += "ВНИМАНИЕ: n < 100 — выводы рано, нужно 100–200 задач. Ниже только сырые цифры.\n";
-  s += "калибровка (корзина уверенности: n, средняя уверенность, точность):\n";
-  for (var b of calibrationBuckets(rows)) {
-    s += "  " + b.b + "-" + (b.b + 24) + ": n=" + b.n + "  уверенность " + b.mc.toFixed(0) + "%  точность " + (b.ac * 100).toFixed(0) + "%  " +
-      (conclusions && b.mc / 100 > b.ac + 0.15 ? "САМОУВЕРЕННОСТЬ" : "") + "\n";
+function tasksForGap(gap, variance, zCrit) {
+  variance = variance === undefined ? 0.2 : variance;
+  zCrit = zCrit === undefined ? Z_CRIT_THEME : zCrit;
+  return Math.ceil(Math.pow(zCrit + Z_POWER80, 2) * variance / (gap * gap));
+}
+function pct(x, d) { return (x * 100).toFixed(d === undefined ? 0 : d) + "%"; }
+function pp(x, d) { return (x >= 0 ? "+" : "") + (x * 100).toFixed(d === undefined ? 0 : d); }
+function pad(s, n) { s = String(s); while (s.length < n) s += " "; return s; }
+function buildReportSection(scoped) {
+  var rows = withoutHints(scoped), hinted = scoped.length - rows.length, n = rows.length;
+  if (!n) return scoped.length ? "все строки лога с подсказками: в статистику не идут" : "лог пуст";
+  var cs = calibrationSummary(rows);
+  var s = "задач в анализе: " + n + (hinted ? " (с подсказками исключено: " + hinted + ")" : "") + "\n";
+  s += "точность: " + pct(cs.acc, 1) + " [" + pct(cs.acc_lo) + "-" + pct(cs.acc_hi) + "]  средняя уверенность: " + pct(cs.mean_conf) + "\n";
+  s += "смещение: " + pp(cs.bias, 1) + " п.п., z=" + (cs.bias_z >= 0 ? "+" : "") + cs.bias_z.toFixed(1) + "\n";
+  s += "log-loss: " + cs.log_loss.toFixed(3) + " (константа " + cs.log_loss_base.toFixed(3) + ")  Brier: " +
+    cs.brier.toFixed(3) + "  навык: " + (cs.skill >= 0 ? "+" : "") + cs.skill.toFixed(2) + "\n";
+  s += "вердикт по калибровке: " + cs.verdict + (cs.verdict === "мало данных" ? " (нужно n >= " + MIN_N_CALIBRATION + ")" : "") + "\n";
+  s += "корзины уверенности (n, уверенность, точность [95%]):\n";
+  reliability(rows).forEach(function (b) {
+    s += "  " + b.lo + "-" + b.hi + ": n=" + b.n + "  " + pct(b.mean_conf) + "  " + pct(b.acc) +
+      " [" + pct(b.acc_lo) + "-" + pct(b.acc_hi) + "]\n";
+  });
+  var tt = themeTable(rows), flagged = 0;
+  s += "темы (только мотивы; прогноз по Elo-логисте, остатки центрированы по длине задачи):\n";
+  tt.rows.filter(function (r) { return r.n >= 5; }).slice(0, 12).forEach(function (r) {
+    if (r.flag) flagged++;
+    s += "  " + pad(r.theme, 17) + " n=" + pad(r.n, 3) + " факт " + pct(r.acc) + " прогноз " + pct(r.exp) +
+      " разрыв " + pp(r.gap) + " [" + pp(r.lo) + ".." + pp(r.hi) + "]" +
+      (r.shrunk !== null ? " усадка " + pp(r.shrunk) : " n<" + MIN_N_THEME) +
+      (r.flag === "weak" ? "  <-- СЛАБО" : (r.flag === "strong" ? "  <-- СИЛЬНО" : "")) + "\n";
+  });
+  if (!flagged) {
+    s += "флагов по темам нет: на этом объёме слабые темы статистически не видны (провал в 15 п.п. по одной теме замечается примерно с " +
+      tasksForGap(0.15) + " задач этой темы)\n";
   }
-  s += "таблица опасности по темам (факт vs прогноз Glicko):\n";
-  for (var d of dangerTable(rows)) {
-    s += "  " + d.t + "  n=" + d.n + "  факт " + (d.ac * 100).toFixed(0) + "%  прогноз " + (d.ex * 100).toFixed(0) + "%  разрыв " +
-      (d.gap >= 0 ? "+" : "") + (d.gap * 100).toFixed(0) + "%" +
-      (conclusions && d.gap < -0.15 ? " <-- ХУЖЕ ПРОГНОЗА" : "") + "\n";
+  return s;
+}
+/* Отчёт по логу: режимы с разными условиями нельзя смешивать в одной калибровке
+   (как в trainer.report) — при нескольких режимах разделы по каждому отдельно
+   плюс профиль «какой режим слабее» (только при n >= 100 в каждом). */
+function modeOf(r) { return r.mode || "classic"; }
+function buildReport(allRows) {
+  var modes = [];
+  allRows.forEach(function (r) { var m = modeOf(r); if (modes.indexOf(m) === -1) modes.push(m); });
+  if (modes.length <= 1 && (modes.length === 0 || modes[0] === "classic")) return buildReportSection(allRows);
+  var s = "";
+  modes.forEach(function (m) {
+    s += "===== режим " + m + " =====\n" +
+      buildReportSection(allRows.filter(function (r) { return modeOf(r) === m; }));
+  });
+  if (modes.indexOf("intuition") !== -1 && modes.indexOf("calc") !== -1) {
+    var rows = withoutHints(allRows), diffs = {}, ns = {};
+    ["intuition", "calc"].forEach(function (m) {
+      var mr = rows.filter(function (r) { return modeOf(r) === m; });
+      ns[m] = mr.length;
+      diffs[m] = mr.length ? (mr.reduce(function (a, r) { return a + (r.correct ? 1 : 0); }, 0) / mr.length
+        - mr.reduce(function (a, r) { return a + Number(r.expected); }, 0) / mr.length) : 0;
+    });
+    if (ns.intuition >= 100 && ns.calc >= 100) {
+      var weaker = diffs.intuition < diffs.calc ? "интуиция" : "расчёт";
+      s += "\nпрофиль: " + weaker + " слабее (разница intuition " +
+        (diffs.intuition * 100 >= 0 ? "+" : "") + (diffs.intuition * 100).toFixed(1) +
+        " п.п., calc " + (diffs.calc * 100 >= 0 ? "+" : "") + (diffs.calc * 100).toFixed(1) + " п.п.)\n";
+    } else {
+      s += "\nпрофиль: выводы рано (нужно n >= 100 в КАЖДОМ режиме; сейчас intuition " +
+        ns.intuition + ", calc " + ns.calc + ")\n";
+    }
   }
   return s;
 }
 
 /* --- Состояние --- */
 var POOL = EMBEDDED.slice();
+var CALC_POOL = EMBEDDED_CALC.slice();
+var INTUITION_LIMIT = 10, CALC_SOFT_LIMIT = 180, RATING_BAND = 200;
 var LOG_KEY = "qgt_log";
 var log = [];
 try { log = JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); } catch (e) { log = []; }
@@ -377,13 +618,30 @@ var session = null; // {queue, i, puzzle, st, legal, selected, pending, t0, rati
 var GLYPHS = { w: { k: "♔", q: "♕", r: "♖", b: "♗", n: "♘", p: "♙" }, b: { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" } };
 var $ = function (id) { return document.getElementById(id); };
 
+var LOG_FIELDS = ["ts", "user", "session", "puzzle_id", "rating", "themes", "set", "move", "solution",
+  "confidence", "correct", "winning", "seconds", "expected", "hints",
+  "mode", "line", "depth", "strict", "timeout"];   // как FIELDS в chess/session.py
+function csvCell(v) { return v === undefined || v === null ? "" : String(v).replace(/[",\r\n]/g, " "); }
+function newSessionId() {
+  return new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "-" + Math.random().toString(36).slice(2, 8);
+}
 function saveLog() { try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch (e) {} }
 function updatePoolInfo() {
   var tr = POOL.filter(function (p) { return p.set === "train"; }).length;
   var te = POOL.filter(function (p) { return p.set === "test"; }).length;
-  $("poolInfo").textContent = "задач в пуле: " + POOL.length + " (train " + tr + ", test " + te + "), в логе: " + log.length;
+  var ctr = CALC_POOL.filter(function (p) { return p.set === "train"; }).length;
+  var cte = CALC_POOL.filter(function (p) { return p.set === "test"; }).length;
+  $("poolInfo").textContent = "задач classic: " + POOL.length + " (train " + tr + ", test " + te +
+    "), calc: " + CALC_POOL.length + " (train " + ctr + ", test " + cte + "), в логе: " + log.length;
 }
 updatePoolInfo();
+
+/* Подсказки — только для classic; в режимах intuition/calc они не применяются. */
+$("modeSel").addEventListener("change", function () {
+  var isClassic = $("modeSel").value === "classic";
+  $("hintsChk").disabled = !isClassic;
+  if (!isClassic) $("hintsChk").checked = false;
+});
 
 $("conf").addEventListener("input", function () { $("confVal").textContent = $("conf").value + "%"; });
 
@@ -406,16 +664,22 @@ $("csvFile").addEventListener("change", function (ev) {
   var rd = new FileReader();
   rd.onload = function () {
     var lines = rd.result.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    var isCalc = lines.length && lines[0].indexOf("Line") !== -1;
     var out = [];
     for (var i = 1; i < lines.length; i++) {
       var c = lines[i].split(",");
-      if (c.length < 5) continue;
-      out.push({ id: c[0], fen: c[1], sol: c[2], rating: +c[3], themes: c[4], set: hashSet(c[0]) });
+      if (isCalc) {
+        if (c.length < 6) continue;
+        out.push({ id: c[0], fen: c[1], sol: c[2], line: c[3], rating: +c[4], themes: c[5], set: hashSet(c[0]) });
+      } else {
+        if (c.length < 5) continue;
+        out.push({ id: c[0], fen: c[1], sol: c[2], rating: +c[3], themes: c[4], set: hashSet(c[0]) });
+      }
     }
-    if (!out.length) { alert("CSV не распознан (нужны колонки PuzzleId,FEN,Solution,Rating,Themes)"); return; }
-    POOL = out;
+    if (!out.length) { alert("CSV не распознан (нужны колонки PuzzleId,FEN,Solution,Rating,Themes или с Line для calc)"); return; }
+    if (isCalc) { CALC_POOL = out; alert("Загружено задач calc: " + out.length); }
+    else { POOL = out; alert("Загружено задач: " + out.length); }
     updatePoolInfo();
-    alert("Загружено задач: " + out.length);
   };
   rd.readAsText(f);
 });
@@ -448,7 +712,7 @@ function legalFrom(sq) {
   return session.legal.filter(function (m) { return m.from === sq; });
 }
 function onSquare(sq) {
-  if (session.answered) return;
+  if (session.answered || session.mode === "calc") return;  // в calc доска не интерактивна: линия вводится вслепую
   var st = session.st;
   if (session.selected === null) {
     var p = st.board[sq];
@@ -489,9 +753,65 @@ function applyMove(m) {
   session.pending = m;
   session.st = makeMove(session.st, m);
   session.selected = null; session.targets = [];
+  if (session.mode === "intuition") {
+    // dt фиксируется в момент хода; таймаут — промах, уверенность = 0, без запроса уверенности.
+    // Отсчёт после хода останавливаем: уверенность спрашивается вне лимита, и надпись
+    // «лимит истёк» после сделанного хода вводила бы в заблуждение (живая проверка 2026-11-05).
+    session.dt = (performance.now() - session.t0) / 1000;
+    $("timerLine").textContent = "ход сделан за " + session.dt.toFixed(1) + " с" +
+      (session.dt > session.limit ? " — таймаут" : "");
+    stopTimer();
+    if (session.dt > session.limit) { answerIntuitionTimeout(); return; }
+  }
   $("submitBtn").disabled = false;
   $("status").textContent = "Твой ход: " + moveUCI(m) + ". Поставь уверенность и нажми «Ответить».";
   renderBoard();
+}
+function pushLogRow(row) { log.push(row); saveLog(); }
+function logRowFields(p, setName) {
+  return { ts: new Date().toISOString(), user: session.user, session: session.id,
+    puzzle_id: p.id, rating: p.rating, themes: p.themes, set: setName };
+}
+function finishAnswer() {
+  stopTimer();
+  session.answered = true;
+  $("submitBtn").disabled = true;
+  $("nextBtn").style.display = "inline-block";
+  updatePoolInfo();
+}
+function answerIntuitionTimeout() {
+  var p = session.puzzle, mv = moveUCI(session.pending), dt = session.dt;
+  var exp = expectedP(session.rating, p.rating);
+  pushLogRow(Object.assign(logRowFields(p, session.setName), {
+    move: mv, solution: p.sol, confidence: 0, correct: 0, winning: 0,
+    seconds: Math.round(dt * 10) / 10, expected: Math.round(exp * 1000) / 1000,
+    hints: 0, mode: "intuition", line: "", depth: "", strict: "", timeout: 1 }));
+  finishAnswer();
+  $("feedback").textContent = "ТАЙМАУТ (" + dt.toFixed(1) + " с > " + session.limit + " с) — промах, уверенность = 0. " +
+    "Решение: " + p.sol + ". Рейтинг задачи " + p.rating + ", темы: " + p.themes +
+    ". Ожидаемый шанс: " + Math.round(exp * 100) + "%.";
+  $("feedback").className = "bad";
+  renderBoard();
+}
+function stopTimer() {
+  if (session && session.timer) { clearInterval(session.timer); session.timer = null; }
+}
+function startTimer() {
+  // Живой отсчёт — только отображение; скоринг всегда идёт по dt в момент хода
+  // (как в Python: таймаут определяется по dt, а не по срабатыванию таймера).
+  if (typeof setInterval !== "function") return;
+  stopTimer();
+  var limit = session.mode === "intuition" ? session.limit : CALC_SOFT_LIMIT;
+  session.timer = setInterval(function () {
+    if (!session || session.answered) { stopTimer(); return; }
+    var dt = (performance.now() - session.t0) / 1000;
+    if (session.mode === "intuition") {
+      $("timerLine").textContent = dt <= limit ? ("осталось " + (limit - dt).toFixed(1) + " с")
+        : "лимит истёк — ход будет засчитан как промах";
+    } else if (session.mode === "calc") {
+      $("timerLine").textContent = "прошло " + dt.toFixed(0) + " с (мягкий лимит " + limit + " с)";
+    }
+  }, 100);
 }
 function showPuzzle() {
   var p = session.queue[session.i];
@@ -499,64 +819,127 @@ function showPuzzle() {
   session.st = parseFEN(p.fen);
   session.legal = genLegal(session.st, session.st.turn);
   session.selected = null; session.targets = []; session.pending = null; session.answered = false;
+  session.dt = null;
   session.t0 = performance.now();
   $("game").style.display = "block";
   $("puzzleInfo").textContent = "[" + (session.i + 1) + "/" + session.queue.length + "] " + p.id +
-    "  рейтинг " + p.rating + "  темы: " + p.themes + "  (" + (session.st.turn === "w" ? "ход белых" : "ход чёрных") + ")";
-  $("status").textContent = "Выбери фигуру и клетку назначения.";
+    (session.hints ? "  рейтинг " + p.rating + "  темы: " + p.themes : "") + "  (" + (session.st.turn === "w" ? "ход белых" : "ход чёрных") + ")";
+  if (session.mode === "calc") {
+    $("status").textContent = "Введи ВСЮ линию вслепую (свои ходы и ожидаемые ответы). Доска не интерактивна.";
+    $("timerLine").style.display = "block";
+    $("lineInputWrap").style.display = "block";
+    $("lineInput").value = "";
+    $("submitBtn").disabled = false;
+  } else {
+    $("status").textContent = session.mode === "intuition"
+      ? "Выбери фигуру и клетку назначения. Жёсткий лимит " + session.limit + " с на ход."
+      : "Выбери фигуру и клетку назначения.";
+    $("timerLine").style.display = session.mode === "intuition" ? "block" : "none";
+    $("timerLine").textContent = session.mode === "intuition" ? ("осталось " + session.limit + ".0 с") : "";
+    $("lineInputWrap").style.display = "none";
+    $("submitBtn").disabled = true;
+  }
   $("feedback").textContent = ""; $("feedback").className = "";
-  $("submitBtn").disabled = true;
   $("nextBtn").style.display = "none";
   $("conf").value = 50; $("confVal").textContent = "50%";
   renderBoard();
+  startTimer();
 }
 $("startBtn").addEventListener("click", function () {
   var setName = $("setSel").value;
   var n = Math.max(1, Math.min(100, +$("nInput").value || 10));
   var rating = +$("rating").value || 886;
+  var mode = $("modeSel").value || "classic";
   var solved = {};
-  for (var r of log) solved[r.puzzle_id] = true;
-  var pool = POOL.filter(function (p) { return p.set === setName && !solved[p.id]; });
-  if (pool.length < n) pool = POOL.filter(function (p) { return p.set === setName; });
+  for (var r of log) solved[r.puzzle_id] = true;  // все режимы исключают уже виденные id
+  var base = (mode === "calc") ? CALC_POOL : POOL;
+  var pool = base.filter(function (p) { return p.set === setName && !solved[p.id]; });
+  if (mode === "classic") {
+    if (pool.length < n) pool = base.filter(function (p) { return p.set === setName; });
+  } else {
+    // intuition/calc: полоса ±200 вокруг рейтинга игрока, без возврата к решённым (как в trainer.run_modes)
+    pool = pool.filter(function (p) { return Math.abs(p.rating - rating) <= RATING_BAND; });
+  }
   // перетасовать
   for (var i = pool.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
   var queue = pool.slice(0, Math.min(n, pool.length));
-  if (!queue.length) { alert("Нет задач в сете " + setName); return; }
-  session = { queue: queue, i: 0, rating: rating, setName: setName };
+  if (!queue.length) {
+    alert(mode === "classic" ? "Нет задач в сете " + setName
+      : "Нет свежих задач в сете " + setName + " в полосе ±" + RATING_BAND + " от рейтинга " + rating);
+    return;
+  }
+  session = { queue: queue, i: 0, rating: rating, setName: setName,
+    hints: mode === "classic" && !!$("hintsChk").checked, user: ($("nick").value.trim() || "anon"), id: newSessionId(),
+    mode: mode, limit: INTUITION_LIMIT, timer: null };
   showPuzzle();
 });
 $("submitBtn").addEventListener("click", function () {
-  if (!session.pending || session.answered) return;
-  session.answered = true;
-  var dt = (performance.now() - session.t0) / 1000;
-  var mv = moveUCI(session.pending);
+  if (session.answered) return;
   var p = session.puzzle;
-  var correct = (mv === p.sol);
-  var conf = +$("conf").value;
   var exp = expectedP(session.rating, p.rating);
-  log.push({ puzzle_id: p.id, rating: p.rating, themes: p.themes, set: session.setName, move: mv,
-    solution: p.sol, confidence: conf, correct: correct ? 1 : 0, winning: correct ? 1 : 0,
-    seconds: Math.round(dt * 10) / 10, expected: Math.round(exp * 1000) / 1000 });
-  saveLog();
-  $("feedback").textContent = (correct ? "ВЕРНО" : "МИМО (решение: " + p.sol + ")") +
-    ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + dt.toFixed(1) + " c.";
+  var conf = +$("conf").value;
+  if (session.mode === "calc") {
+    var entered = $("lineInput").value.trim();
+    if (!entered) { $("status").textContent = "Введи линию (UCI через пробел)."; return; }
+    var dt = (performance.now() - session.t0) / 1000;
+    var sc = scoreCalc(p.fen, entered, p.line);
+    var nLine = p.line.split(/\s+/).length;
+    pushLogRow(Object.assign(logRowFields(p, session.setName), {
+      move: entered.split(/\s+/)[0] || "", solution: p.sol, confidence: conf,
+      correct: sc.strict, winning: sc.strict,
+      seconds: Math.round(dt * 10) / 10, expected: Math.round(exp * 1000) / 1000,
+      hints: 0, mode: "calc", line: entered, depth: sc.depth, strict: sc.strict, timeout: 0 }));
+    finishAnswer();
+    $("feedback").textContent = (sc.strict ? "ЛИНИЯ ВЕРНА" : "ОШИБКА В ЛИНИИ") +
+      " (глубина " + sc.depth + "/" + nLine + "). Решение: " + p.line +
+      ". Рейтинг задачи " + p.rating + ", темы: " + p.themes +
+      ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + dt.toFixed(1) + " c." +
+      (dt > CALC_SOFT_LIMIT ? " Мягкий лимит превышен (" + dt.toFixed(1) + " с > " + CALC_SOFT_LIMIT + " с) — только логируется." : "");
+    $("feedback").className = sc.strict ? "ok" : "bad";
+    return;
+  }
+  if (!session.pending) return;
+  var mv = moveUCI(session.pending);
+  if (session.mode === "intuition") {
+    // dt — в момент хода (уверенность спрашивается после, вне лимита); таймаут уже обработан в applyMove
+    var si = scoreIntuition(p.fen, mv, p.sol, p.themes, session.dt, session.limit);
+    pushLogRow(Object.assign(logRowFields(p, session.setName), {
+      move: mv, solution: p.sol, confidence: conf, correct: si.correct, winning: si.winning,
+      seconds: Math.round(session.dt * 10) / 10, expected: Math.round(exp * 1000) / 1000,
+      hints: 0, mode: "intuition", line: "", depth: "", strict: "", timeout: si.timeout }));
+    finishAnswer();
+    var verdict = si.correct ? "ВЕРНО" : (si.winning ? "ВЫИГРЫШ (другой ход)" : "МИМО");
+    $("feedback").textContent = verdict + " (решение: " + p.sol + "). Рейтинг задачи " + p.rating +
+      ", темы: " + p.themes + ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + session.dt.toFixed(1) + " c.";
+    $("feedback").className = si.correct ? "ok" : "bad";
+    return;
+  }
+  var dtc = (performance.now() - session.t0) / 1000;
+  var correct = (mv === p.sol);
+  var winning = correct || isWinning(p.fen, mv);
+  pushLogRow(Object.assign(logRowFields(p, session.setName), {
+    move: mv, solution: p.sol, confidence: conf, correct: correct ? 1 : 0, winning: winning ? 1 : 0,
+    seconds: Math.round(dtc * 10) / 10, expected: Math.round(exp * 1000) / 1000,
+    hints: session.hints ? 1 : 0, mode: "classic", line: "", depth: "", strict: "", timeout: 0 }));
+  finishAnswer();
+  var verdictC = correct ? "ВЕРНО" : (winning ? "ВЫИГРЫШ (другой ход)" : "МИМО");
+  $("feedback").textContent = verdictC + " (решение: " + p.sol + "). Рейтинг задачи " + p.rating +
+    ", темы: " + p.themes + ". Ожидаемый шанс: " + Math.round(exp * 100) + "%. Время: " + dtc.toFixed(1) + " c.";
   $("feedback").className = correct ? "ok" : "bad";
-  $("submitBtn").disabled = true;
-  $("nextBtn").style.display = "inline-block";
-  updatePoolInfo();
 });
 $("nextBtn").addEventListener("click", function () {
   session.i++;
   if (session.i >= session.queue.length) {
+    stopTimer();
     $("game").style.display = "none";
     $("reportOut").textContent = "--- итог сессии ---\n" + buildReport(log);
   } else showPuzzle();
 });
 $("reportBtn").addEventListener("click", function () { $("reportOut").textContent = buildReport(log); });
 $("exportBtn").addEventListener("click", function () {
-  var F = ["puzzle_id", "rating", "themes", "set", "move", "solution", "confidence", "correct", "winning", "seconds", "expected"];
+  var F = LOG_FIELDS;
   var lines = [F.join(",")];
-  for (var r of log) lines.push(F.map(function (k) { return r[k]; }).join(","));
+  for (var r of log) lines.push(F.map(function (k) { return csvCell(r[k]); }).join(","));
   var blob = new Blob([lines.join("\n")], { type: "text/csv" });
   var a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = "trainer_log.csv"; a.click();

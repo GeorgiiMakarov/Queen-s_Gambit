@@ -152,7 +152,7 @@ def _pp(x, d=0):
 def format_report(all_rows, user=None, mode=None):
     """Отчёт: точность с интервалом, калибровка с вердиктом, корзины, таблица тем.
     Строки с подсказками в статистику не идут. Режимы (intuition/calc) с разными
-    условиями нельзя смешивать в одной калибровке: ожидание Glicko верно только
+    условиями нельзя смешивать в одной калибровке: ожидание по Elo-логисте верно только
     для решения без ограничений, поэтому mode фильтрует строки (как hints)."""
     scoped = [r for r in all_rows if user is None or r.get("user") in (user, "", None)]
     if mode is not None:
@@ -176,7 +176,7 @@ def format_report(all_rows, user=None, mode=None):
         out.append("  %d-%d: n=%d  %s  %s [%s-%s]" % (b["lo"], b["hi"], b["n"], _pct(b["mean_conf"]),
                                                       _pct(b["acc"]), _pct(b["acc_lo"]), _pct(b["acc_hi"])))
     tt = S.theme_table(rows)
-    out.append("темы (только мотивы; прогноз Glicko, остатки центрированы по длине задачи):")
+    out.append("темы (только мотивы; прогноз по Elo-логисте, остатки центрированы по длине задачи):")
     flagged = 0
     for r in [r for r in tt["rows"] if r["n"] >= 5][:12]:
         flagged += 1 if r["flag"] else 0

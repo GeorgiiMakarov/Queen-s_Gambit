@@ -1,5 +1,7 @@
 # engine-method
 
+An open-source framework for measuring human decision accuracy, confidence calibration, and learning effectiveness under uncertainty.
+
 [![Selftest](https://github.com/GeorgiiMakarov/Queen-s_Gambit/actions/workflows/selftest.yml/badge.svg)](https://github.com/GeorgiiMakarov/Queen-s_Gambit/actions/workflows/selftest.yml)
 
 Метод, вынесенный из маджонг-движка `danger_ev`, применённый к шахматам.
@@ -32,7 +34,7 @@ docs/      план пилота и черновик питча
    интервалы Уилсона, Brier, навык log-loss против константного прогноза и
    вердикт (`common/stats.py`). Вердикт о самоуверенности только при n >= 30.
 3. **Таблица опасности**: только тактические мотивы (служебные теги вроде фазы
-   и длины исключены), прогноз по Glicko, остатки центрируются по длине задачи,
+   и длины исключены), прогноз по Elo-логисте, остатки центрируются по длине задачи,
    усадка между темами. Флаг СЛАБО при n >= 20, z <= -3 и разрыве после усадки
    не меньше 5 п.п. На малых выборках флагов нет: это размер выборки, а не
    поломка (`tasks_for_gap`, `mde`).
