@@ -34,14 +34,19 @@ Usage:
   python resample_calc.py --db <lichess_db_puzzle.csv.zst> \
       --existing puzzles_calc.csv --out <new-pool>.csv \
       [--per-band 300] [--seed 20261105]
-  --out is required and must differ from --existing unless --force
-  is given (overwriting the input file is refused otherwise).
+  --out is required (except for --validate-existing) and must differ
+  from --existing unless --force is given (overwriting the input file
+  is refused otherwise).
   A rerun on an already topped-up pool is a no-op: every unfrozen
   band already holds per-band rows, so need = 0 everywhere and the
   output is byte-identical to the input.
 
 --validate-existing only checks that the conversion reproduces the
 existing rows from the full DB (FEN/Solution/Line), and exits.
+It needs no --out: validation runs before everything else.
+Rating drift is reported separately (rating_drift, max_drift) and
+does not fail the check: pool ratings are stale against newer
+snapshots, while the conversion itself still reproduces.
 A run tops up each unfrozen band to --per-band rows
 (need = max(0, per-band - have), have counted with band_of),
 excluding the existing PuzzleIds, plus an RD sidecar for the Elo-baseline
@@ -112,7 +117,7 @@ def stream_db(path):
 def validate_existing(db_path, existing_path):
     existing = {r["PuzzleId"]: r for r in
                 csv.DictReader(open(existing_path, encoding="utf-8"))}
-    found, ok, bad = 0, 0, []
+    found, ok, bad, drift = 0, 0, [], []
     for row in stream_db(db_path):
         pid = row["PuzzleId"]
         if pid not in existing:
@@ -121,14 +126,17 @@ def validate_existing(db_path, existing_path):
         conv = convert(row)
         exp = existing[pid]
         if conv and conv["FEN"] == exp["FEN"] and conv["Solution"] == exp["Solution"] \
-                and conv["Line"] == exp["Line"] and conv["Rating"] == exp["Rating"]:
+                and conv["Line"] == exp["Line"]:
             ok += 1
+            if conv["Rating"] != exp["Rating"]:
+                drift.append(abs(int(conv["Rating"]) - int(exp["Rating"])))
         else:
             bad.append(pid)
         if found == len(existing):
             break
     print(f"existing={len(existing)} found_in_db={found} "
-          f"conversion_reproduced={ok} mismatched={bad[:10]}")
+          f"conversion_reproduced={ok} mismatched={bad[:10]} "
+          f"rating_drift={len(drift)} max_drift={max(drift, default=0)}")
     return found == len(existing) and ok == len(existing)
 
 
@@ -136,7 +144,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
     ap.add_argument("--existing", default="puzzles_calc.csv")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", default=None,
+                    help="required unless --validate-existing")
     ap.add_argument("--per-band", type=int, default=300)
     ap.add_argument("--seed", type=int, default=20261105)
     ap.add_argument("--force", action="store_true",
@@ -144,14 +153,17 @@ def main():
     ap.add_argument("--validate-existing", action="store_true")
     args = ap.parse_args()
 
+    if args.validate_existing:
+        sys.exit(0 if validate_existing(args.db, args.existing) else 1)
+
+    if args.out is None:
+        ap.error("--out is required")
+
     if os.path.abspath(args.out) == os.path.abspath(args.existing) \
             and not args.force:
         print(f"refusing to overwrite {args.existing}: --out == --existing "
               f"(pass --force to confirm)", file=sys.stderr)
         sys.exit(2)
-
-    if args.validate_existing:
-        sys.exit(0 if validate_existing(args.db, args.existing) else 1)
 
     existing = list(csv.DictReader(open(args.existing, encoding="utf-8")))
     existing_ids = {r["PuzzleId"] for r in existing}
@@ -216,10 +228,17 @@ def main():
         w = csv.DictWriter(fh, fieldnames=["PuzzleId", "Rating",
                                            "RatingDeviation", "Popularity"])
         w.writeheader()
+        missing_rd = 0
         for r in out_rows:
             rd, pop = rd_map.get(r["PuzzleId"], ("", ""))
+            if rd == "" or pop == "":
+                missing_rd += 1
             w.writerow({"PuzzleId": r["PuzzleId"], "Rating": r["Rating"],
                         "RatingDeviation": rd, "Popularity": pop})
+    print(f"sidecar rows without RD/Popularity: {missing_rd}")
+    if missing_rd:
+        print(f"WARNING: {missing_rd} sidecar rows have empty "
+              f"RD/Popularity", file=sys.stderr)
     print(f"wrote {args.out}: {len(out_rows)} rows "
           f"({len(existing)} existing + {len(out_rows) - len(existing)} new)")
     print(f"wrote {rd_path}: RD sidecar for the Elo-baseline check")
